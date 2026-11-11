@@ -11,7 +11,8 @@ saf Python ile cozulur.
 IKI BICIM
 ---------------------------------------------------------------------------
 * `dtbo.img`  — Android resmi tablo bicimi (mkdtimg ciktisi). Sihirli sayi
-                `0xd7b7ab1e`. Basligi ve girdi tablosu asagida tanimli.
+                `0xd7b7ab1e`; alanlar FDT gelenegine uygun olarak BUYUK-UCLU
+                yazilir (gercek Samsung dtbo.img ile dogrulandi).
 * `dt.img`    — Samsung'un base DTB kabi. Bicim belgelenmemis/degisken
                 oldugu icin GUVENLI YOL secildi: dosyada `d00dfeed` FDT
                 sihirli sayisini tarayip her gecerli FDT'yi cikaririz.
@@ -174,6 +175,20 @@ class Dtbo:
 def parse_dtbo(buf: bytes) -> Dtbo:
     if len(buf) < DTBO_HEADER_SIZE:
         die("dtbo.img cok kucuk")
+    # DTBO bicimi FDT'yi temel alir: alanlar BUYUK-UCLU (big-endian) yazilir.
+    # Gercek Samsung dtbo.img ile dogrulandi: ilk baytlar 'd7 b7 ab 1e'.
+    # Yine de saglamlik icin iki uclu da denenir; sihirli sayi hangisinde
+    # tutuyorsa o kullanilir.
+    if struct.unpack_from(">I", buf, 0)[0] == DTBO_MAGIC:
+        endian = ">"
+    elif struct.unpack_from("<I", buf, 0)[0] == DTBO_MAGIC:
+        endian = "<"
+    else:
+        magic = struct.unpack_from(">I", buf, 0)[0]
+        die(
+            "bu bir Android DTBO imaji degil "
+            f"(ilk 4 bayt 0x{magic:08x}, beklenen 0x{DTBO_MAGIC:08x})"
+        )
     (
         magic,
         total_size,
@@ -183,12 +198,7 @@ def parse_dtbo(buf: bytes) -> Dtbo:
         entries_offset,
         page_size,
         version,
-    ) = struct.unpack_from("<8I", buf, 0)
-    if magic != DTBO_MAGIC:
-        die(
-            "bu bir Android DTBO imaji degil "
-            f"(sihirli sayi 0x{magic:08x}, beklenen 0x{DTBO_MAGIC:08x})"
-        )
+    ) = struct.unpack_from(endian + "8I", buf, 0)
     if header_size < DTBO_HEADER_SIZE or entry_size < DTBO_ENTRY_SIZE:
         die(f"beklenmeyen baslik/girdi boyutu: header={header_size} entry={entry_size}")
     if total_size > len(buf):
@@ -199,8 +209,8 @@ def parse_dtbo(buf: bytes) -> Dtbo:
     entries: list[DtboEntry] = []
     for i in range(entry_count):
         base = entries_offset + i * entry_size
-        dt_size, dt_offset, ent_id, rev = struct.unpack_from("<4I", buf, base)
-        custom = struct.unpack_from("<4I", buf, base + 16)
+        dt_size, dt_offset, ent_id, rev = struct.unpack_from(endian + "4I", buf, base)
+        custom = struct.unpack_from(endian + "4I", buf, base + 16)
         if dt_offset + dt_size > len(buf):
             die(f"girdi {i}: dt_offset+dt_size dosyanin disinda")
         blob = buf[dt_offset : dt_offset + dt_size]
@@ -291,11 +301,17 @@ def pick_entry(
             print(describe_entry(e, verify), file=sys.stderr)
         raise SystemExit(1)
     if len(top) > 1:
+        # Ayni cihazin birden cok board revizyonu olabilir (or. Samsung
+        # "EUR OPEN 17..25"). En yenisi hemen her zaman en uyumlusudur:
+        # custom[0] revizyon, custom[1] ust sinir (0xFF = "ve uzeri").
+        top.sort(key=lambda e: (e.custom[0], e.custom[1], e.index))
+        chosen = top[-1]
         print(
-            f"UYARI: {len(top)} girdi ayni puani aldi; ilki secildi. "
-            "Emin degilsen --index kullan.",
+            f"  NOT: {len(top)} girdi ayni cihaza uyuyor; en yeni revizyon "
+            f"secildi (girdi [{chosen.index}] custom[0]=0x{chosen.custom[0]:X}).",
             file=sys.stderr,
         )
+        return chosen
     return top[0]
 
 
@@ -392,8 +408,11 @@ def cmd_extract_dtbo(path: Path, needle: str, out: Path, verify: bool, index) ->
 
 def cmd_extract_dtimg(path: Path, out: Path, index: int) -> int:
     buf = path.read_bytes()
-    # Once tablo bicimi olabilir mi diye DTBO'ya bakalim.
-    if len(buf) >= 4 and struct.unpack_from("<I", buf, 0)[0] == DTBO_MAGIC:
+    # Once tablo bicimi olabilir mi diye DTBO'ya bakalim (iki uclu de olabilir).
+    if len(buf) >= 4 and (
+        struct.unpack_from(">I", buf, 0)[0] == DTBO_MAGIC
+        or struct.unpack_from("<I", buf, 0)[0] == DTBO_MAGIC
+    ):
         dtbo = parse_dtbo(buf)
         if not (0 <= index < len(dtbo.entries)):
             die(f"--index {index} aralik disinda (0..{len(dtbo.entries)-1})")

@@ -60,7 +60,11 @@ def parse_nodes(source: str) -> list[Node]:
     """Parse the simple brace/property subset used by the checked-in DTS."""
     nodes: list[Node] = []
     stack: list[Node] = []
-    open_node = re.compile(r"^\s*(/|[A-Za-z0-9_,+\-]+)(?:@[^\s{]+)?\s*\{\s*$")
+    # dtc, DTB'de __symbols__ varsa (fdtoverlay icin gerekli) ciktiya etiket
+    # yazar: "shmem: shmem {". Bunlari da acilis satiri say.
+    open_node = re.compile(
+        r"^\s*(?:[A-Za-z0-9_,+\-]+\s*:\s*)?(/|[A-Za-z0-9_,+\-]+)(?:@[^\s{]+)?\s*\{\s*$"
+    )
 
     for line in source.splitlines():
         stripped = line.strip()

@@ -33,10 +33,14 @@
 #        bash tools_dtb_s10e.sh --tar AP_G970F....tar.md5
 #      tools_dtbo_extract.py dt.img'den base'i, dtbo.img'den model/compatible
 #      alaninda 'beyond0lte' gecen girdiyi secer ve fdtoverlay ile birlestirir.
+#      S10e dtbo.img'sinde 7 girdi vardir; hepsi ayni cihazdir, yalnizca board
+#      revizyonu farklidir (EUR OPEN 17..25). Ayni puan alanlar arasindan EN
+#      YENI revizyon secilir. Belirli bir girdi icin:
+#        bash tools_dtb_s10e.sh --tar AP....tar.md5 --index 6
 #      Girdileri once gormek icin:
 #        python3 tools_dtbo_extract.py --dtbo dtbo.img --list
-#      Yanlis girdi secilirse: --pick <anahtar> ya da
-#        python3 tools_dtbo_extract.py --dtbo dtbo.img --index N --out overlay.dtb
+#
+#      NOT: overlay zaten dogru "model" satirini getirir; model EZILMEZ.
 #
 # Cikti (depoya yazilir):
 #   mu-silicium-overlay/Resources/DTBs/beyond0lte.dtb
@@ -50,7 +54,10 @@ OUT_DTB="$DTBDIR/beyond0lte.dtb"
 OUT_DTS="$DTBDIR/beyond0lte.dts"
 MODEL="Samsung BEYOND0LTE EUR OPEN 26 board based on EXYNOS9820"
 
-FDT=""; BASE=""; OVERLAY=""; TAR=""; DTB_PICK="beyond0lte"
+# Yalnizca DTB'de model hic yoksa/cihaz adi gecmiyorsa kullanilan yedek.
+MODEL="Samsung BEYOND0LTE board based on EXYNOS9820"
+
+FDT=""; BASE=""; OVERLAY=""; TAR=""; DTB_PICK="beyond0lte"; DTBO_INDEX=""
 while [ $# -gt 0 ]; do
   case "$1" in
     --fdt)     FDT="$2"; shift 2 ;;
@@ -58,7 +65,8 @@ while [ $# -gt 0 ]; do
     --overlay) OVERLAY="$2"; shift 2 ;;
     --tar)     TAR="$2"; shift 2 ;;
     --pick)    DTB_PICK="$2"; shift 2 ;;
-    -h|--help) sed -n '2,42p' "$0"; exit 0 ;;
+    --index)   DTBO_INDEX="$2"; shift 2 ;;
+    -h|--help) sed -n '2,46p' "$0"; exit 0 ;;
     *) echo "Bilinmeyen secenek: $1"; exit 1 ;;
   esac
 done
@@ -91,7 +99,7 @@ elif [ -n "$TAR" ]; then
   [ -f "$PROJ/tools_dtbo_extract.py" ] || die "tools_dtbo_extract.py yok"
   say "tar'dan base (dt.img) + S10e overlay (dtbo.img) seciliyor"
   python3 "$PROJ/tools_dtbo_extract.py" --tar "$TAR" --dir "$WORK/tar" \
-    --pick "${DTB_PICK:-beyond0lte}" --quiet \
+    --pick "${DTB_PICK}" ${DTBO_INDEX:+--index "$DTBO_INDEX"} --quiet \
     || die "DTB secilemedi (girdi tablosunu gormek icin: \
 python3 tools_dtbo_extract.py --dtbo <dtbo.img> --list)"
   [ -s "$WORK/tar/base.dtb" ]    || die "base.dtb uretilmedi (tar'da dt.img yok olabilir)"
@@ -108,12 +116,22 @@ dtc -I dtb -O dts -o "$WORK/raw.dts" "$MERGED" 2>/dev/null \
   || die "dtc cozemedi: girdi gecerli bir DTB mi?"
 
 #
-# 2) model satirini S10e'ye sabitle (yoksa compatible'in altina ekle)
+# 2) model satiri
 #
-if grep -q '^	model = ' "$WORK/raw.dts"; then
-  sed -i "s|^	model = .*|	model = \"$MODEL\";|" "$WORK/raw.dts"
+# Overlay (dtbo) zaten dogru S10e modelini getirir: or. "Samsung BEYOND0LTE
+# EUR OPEN 25 board based on EXYNOS9820". Cihazin kendi board revizyonu
+# boylece korunur. Model YALNIZCA eksikse ya da cihaz adi gecmiyorsa
+# doldurulur - aksi halde ezmek yanlis revizyon yazar.
+#
+if grep -qE '^[[:space:]]*model = ".*BEYOND0LTE' "$WORK/raw.dts"; then
+  CUR_MODEL=$(grep -m1 -E '^[[:space:]]*model = ' "$WORK/raw.dts" | sed 's/.*model = //')
+  echo "  model (DTB'den korundu): $CUR_MODEL"
+elif grep -qE '^[[:space:]]*model = ' "$WORK/raw.dts"; then
+  sed -i -E "s|^([[:space:]]*)model = .*|\1model = \"$MODEL\";|" "$WORK/raw.dts"
+  echo "  model (duzeltildi): $MODEL"
 else
   sed -i "0,/^	compatible = /s||	model = \"$MODEL\";\n	compatible = |" "$WORK/raw.dts"
+  echo "  model (eklendi): $MODEL"
 fi
 
 say "DTB yeniden derleniyor"
