@@ -276,13 +276,15 @@ Urut dari yang paling mungkin membuat flash pertama gagal:
    tersedia). Kalau perangkat Anda rev. lebih lama, ganti dengan `--index N`;
    perbedaannya kecil, tetapi ini yang paling benar.
 4. ~~Perangkat belum diuji.~~ **Sudah diuji boot di S10e**: firmware dijalankan
-   S-Boot dan mencapai BDS (menampilkan pesan "No Operating System Found!"
-   lalu mematikan perangkat — belum ada ESP/OS). Menu **Boot Manager** bawaan
-   bisa dibuka dengan menahan **Volume Up** saat boot; tombol Volume dan
-   Bixby berfungsi. Firmware lolos validasi PE (`Mu-beyond0lte.img` 4,4 MB,
-   FD tepat 4 MiB di `0xC9000000`, 67 image).
-   Sisa catatan khusus unit uji: tombol power fisiknya mati (§6.1);
-   verifikasi tanpa shell lewat layar self-test (§6.2).
+   S-Boot dan mencapai BDS; layar self-test `PORT_S10E.md` §6.2 muncul dan
+   **semua nilai sesuai**: `1080x2280` (GOP mode 0), `6144 MB DRAM / 2080 MB
+   free`, `57 desc, max end 0x980000000`, `RAM >=0x980000000 yok (dogru)`,
+   UFS `122016 MB blk=4096`, `FAT/FS 0 volume`, `AbsolutePointer var`, uji
+   tombol live jalan (Vol Down → `SCAN_DOWN`). Menu **Boot Manager** bawaan
+   bisa dibuka dengan menahan **Volume Up** saat boot. Firmware lolos
+   validasi PE (`Mu-beyond0lte.img` 4,4 MB, FD tepat 4 MiB di `0xC9000000`,
+   67 image). Sisa catatan khusus unit uji: tombol power fisiknya mati
+   (§6.1).
 
 Yang **sudah terverifikasi dari DTB asli** (bukan lagi dugaan):
 
@@ -359,11 +361,27 @@ mematikan perangkat (BDS menampilkan "No Operating System Found!", jeda
 Override ini hanya terpasang di `beyond0lte.dsc`. Salinan
 `beyond2ltePkg` tidak disentuh, jadi jalur "no OS" S10+ tetap seperti semula.
 
-#### Hasil uji (diisi setelah flash)
+#### Hasil uji
 
-| Tanggal | SHA-256 `uefi-boot.tar` | Foto/hasil | Catatan |
-| --- | --- | --- | --- |
-| (menunggu flash) | `39c74756e2019de1cd1b6cb888816287ce906fe884a3b4606e74acb5a96e1a60` | — | — |
+Di-flash **2026-11-11** dengan `uefi-boot.tar` SHA-256
+`39c74756e2019de1cd1b6cb888816287ce906fe884a3b4606e74acb5a96e1a60`.
+
+| Baris | Hasil di perangkat | Status |
+| --- | --- | --- |
+| `Display` | `1080x2280 (GOP mode 0)` | OK |
+| `RAM` | `6144 MB DRAM, 2080 MB free` | OK — 6 GiB pas, bukan 8 GiB |
+| `Memmap` | `57 desc, max end 0x980000000` | OK — tidak ada di atas batas |
+| `RAM >=0x980000000` | `yok (dogru)` | OK |
+| `Block IO` | `37 device`; `#1 122016 MB blk=4096 fixed` | OK — UFS 122 GB, blok 4 KiB |
+| `FAT/FS` | `0 volume` | sesuai — memang belum ada ESP |
+| `Touch` | `AbsolutePointer var` | OK — panel sentuh terdeteksi |
+| `Key` (live) | Volume Down → `SCAN_DOWN (0x02)` | OK |
+
+Kesimpulan: memory map, UFS, GOP, dan keberadaan panel sentuh semuanya
+sesuai perkiraan; **tidak ada** bank DRAM hantu di atas `0x980000000` dan
+total DRAM tepat 6 GiB. Sisa uji manual yang belum dicatat: sentuh layar
+(baris `Touch`), Bixby singkat (`ENTER`), Bixby tahan (`SCAN_ESC`), dan
+keluar dengan Bixby-tahan + Volume.
 
 ---
 
