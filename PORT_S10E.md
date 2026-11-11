@@ -275,10 +275,14 @@ Urut dari yang paling mungkin membuat flash pertama gagal:
 3. **Revisi board fisik.** DTB memakai `EUR OPEN 25` (revisi tertinggi yang
    tersedia). Kalau perangkat Anda rev. lebih lama, ganti dengan `--index N`;
    perbedaannya kecil, tetapi ini yang paling benar.
-4. ~~Perangkat belum diuji.~~ **Sudah diuji boot di S10e**: menu/EFI Shell
-   tampil, tombol Volume dan Bixby berfungsi. Firmware lolos validasi PE
-   (`Mu-beyond0lte.img` 4,4 MB, FD tepat 4 MiB di `0xC9000000`, 67 image).
-   Sisa catatan khusus unit uji: tombol power fisiknya mati (§6.1).
+4. ~~Perangkat belum diuji.~~ **Sudah diuji boot di S10e**: firmware dijalankan
+   S-Boot dan mencapai BDS (menampilkan pesan "No Operating System Found!"
+   lalu mematikan perangkat — belum ada ESP/OS). Menu **Boot Manager** bawaan
+   bisa dibuka dengan menahan **Volume Up** saat boot; tombol Volume dan
+   Bixby berfungsi. Firmware lolos validasi PE (`Mu-beyond0lte.img` 4,4 MB,
+   FD tepat 4 MiB di `0xC9000000`, 67 image).
+   Sisa catatan khusus unit uji: tombol power fisiknya mati (§6.1);
+   verifikasi tanpa shell lewat layar self-test (§6.2).
 
 Yang **sudah terverifikasi dari DTB asli** (bukan lagi dugaan):
 
@@ -314,6 +318,47 @@ sebelum Bixby melewati 0,5 dtk (perilaku sama seperti tombol power asli).
 
 Perubahan ini **hanya** di `beyond0ltePkg`; salinan di `beyond2ltePkg`
 tidak disentuh, jadi perilaku S10+ tetap seperti semula.
+
+### 6.2 Verifikasi tanpa shell: layar self-test "no OS"
+
+Kenyataan di perangkat: **tidak ada** partisi ESP/FAT, dan keypad hanya
+menghasilkan `Up`/`Down`/`Enter`/`Esc` — **tidak ada huruf**. Jadi EFI Shell
+tidak bisa dipakai mengetik `memmap` atau perintah lain. BDS pun berhenti
+dengan "No Operating System Found!" lalu mematikan perangkat.
+
+Karena itu `beyond0ltePkg` meng-override `DeviceBootManagerLib` (default
+`SiliciumNullPkg`, isinya kosong) dengan
+`Library/PlatformBootManagerLib/B2LPlatformBootManager.c`. Fungsi
+`DeviceBootManagerUnableToBoot()` — dipanggil BDS tepat sebelum mencetak
+logo/no-OS — kini menggambar **layar self-test** dan menahannya sampai
+pengguna keluar. Verifikasi cukup dengan memotret layar; tidak butuh alat,
+ESP, maupun mengetik.
+
+Yang ditampilkan (dan nilai yang benar):
+
+| Baris | Arti | Nilai benar |
+| --- | --- | --- |
+| `Display` | mode GOP aktif | 1080×2280 |
+| `RAM` | usable/free dari memory map | usable ≈ 6144 MB, free ≠ 0 |
+| `Memmap` | jumlah descriptor + alamat tertinggi | max < `0x980000000` |
+| `Bank >=0x980000000` | sanity DRAM S10e | `yok (dogru)` |
+| `Block IO` | perangkat block terpasang | UFS ≈ 122 GB |
+| `FAT/FS` | volume FAT terpasang | `0 volume` (memang belum ada ESP) |
+| `Touch` | `EFI_ABSOLUTE_POINTER_PROTOCOL` | `AbsolutePointer var` |
+| `Key` / `Touch` (bawah) | uji tombol/sentuh live | berubah saat ditekan |
+
+Keluar/matikan: **tahan Bixby, lalu tekan Volume Up/Down** (menghasilkan
+`Left`/`Right`). Setelah keluar, firmware melanjutkan jalur "no OS" dan
+mematikan perangkat.
+
+Override ini hanya terpasang di `beyond0lte.dsc`. Salinan
+`beyond2ltePkg` tidak disentuh, jadi jalur "no OS" S10+ tetap seperti semula.
+
+#### Hasil uji (diisi setelah flash)
+
+| Tanggal | SHA-256 `uefi-boot.tar` | Foto/hasil | Catatan |
+| --- | --- | --- | --- |
+| (menunggu flash) | `25c8f550d9a816e45cd4c9b322cfed4c7d2840ef7c2e7c6cb4be8d996a02c980` | — | — |
 
 ---
 
