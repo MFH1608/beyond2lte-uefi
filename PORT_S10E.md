@@ -460,19 +460,23 @@ hanya `ConSplitter`. Urutan dispatch juga menjelaskan sebabnya —
 `B2LTouchDxe` ada di `APRIORI` sebelum `PmicDxe`, sehingga `entry`-nya
 berjalan sangat awal.
 
-Build `f49b7c7` memperbaiki instrumentasi supaya satu kali flash menunjukkan
+Build `c97d78f` memperbaiki instrumentasi supaya satu kali flash menunjukkan
 titik gagalnya:
 
 1. Protokol teshis sekarang dipasang **pertama kali** di `B2LTouchEntry`,
    bukan di akhir.
-2. `B2L_TOUCH_DIAG` diperluas dengan `Stage` (1=i2c, 2=probe, 3=events,
-   4=reset, 5=install, 6=timer, 7=selesai), `EntryStatus`, `AbsPointer`,
-   `DeviceId[5]`, `Integrity`, dan `BootStatus`.
-3. UI mencari protokol teshis lebih dulu; kalau `AbsPointer` terisi, UI
-   memakai protokol itu **langsung** (melewati `ConSplitter`), lalu
-   memanggil `Reset(TRUE)` sekali di awal self-test untuk mencoba bring-up
-   lagi setelah `PmicDxe` dkk. termuat.
-4. Baris baru: `Touch.entry` (stage + status) dan `Touch.id`
+2. `B2L_TOUCH_DIAG` diperluas dengan `Stage` (1=i2c, 2=events,
+   3=install, 4=probe, 5=reset, 6=timer, 7=selesai), `EntryStatus`,
+   `AbsPointer`, `DeviceId[5]`, `Integrity`, dan `BootStatus`.
+3. Protokol `AbsolutePointer` dipasang **sebelum** probe, sehingga kalau
+   probe/bring-up awal gagal, UI masih bisa memanggil `Reset(TRUE)` untuk
+   mencoba lagi setelah `PmicDxe` dkk. termuat. Karena DXE core membuang
+   imaji driver yang `entry`-nya mengembalikan error, `B2LTouchEntry`
+   sekarang selalu mengembalikan `EFI_SUCCESS` setelah protokol diag
+   terpasang; status sebenarnya ada di `Touch.entry`.
+4. UI mencari protokol teshis lebih dulu; kalau `AbsPointer` terisi, UI
+   memakai protokol itu **langsung** (melewati `ConSplitter`).
+5. Baris baru: `Touch.entry` (stage + status) dan `Touch.id`
    (DeviceId + integrity + boot status).
 
 Interpretasi hasil berikutnya:
@@ -480,21 +484,23 @@ Interpretasi hasil berikutnya:
 | Baris | Arti |
 | --- | --- |
 | `Touch.entry: stage=1` | gagal di `B2LHsI2cInitialize` (LocateProtocol/MapMemoryRegion/InitBus) |
-| `Touch.entry: stage=2` | I2C jalan tetapi probe `sec_ts` gagal (lihat `st`) |
-| `Touch.entry: stage=4` | I2C+probe OK, bring-up `0x30/0xE4/0x62/0x10` gagal |
+| `Touch.entry: stage=2` | gagal membuat event konteks |
+| `Touch.entry: stage=3` | gagal memasang `AbsolutePointer` |
+| `Touch.entry: stage=4` | I2C jalan tetapi probe `sec_ts` gagal (lihat `st` dan `Touch.id`) |
+| `Touch.entry: stage=5` | I2C+probe OK, bring-up `0x30/0xE4/0x62/0x10` gagal |
 | `Touch.entry: stage=7` | driver selesai; fokus ke `Touch.ev`/`Touch.dx` |
 | `Touch.id: 00 00 ...` | Device ID tidak terbaca / bus tidak menjawab |
 | `Touch.id: xx ... i=80 b=20` | chip menjawab; firmware OK dan mode APP |
 
-Bundle build `f49b7c7`: `uefi-boot.tar` SHA-256
-`92e383aabd26b5394e82707d62ac1e0e44cd24b8c995972b220042485140ca89`,
+Bundle build `c97d78f`: `uefi-boot.tar` SHA-256
+`7387668e1081813b4cd4355918fb1afaf6972369c59438ebb68fe3a1040722fe`,
 `Mu-beyond0lte.img` SHA-256
-`81035aecefc8b9cb2f7f40398c10bff8cd9c84b23ac7eb5696c29c65892312fe`.
+`1ee095232376bad8ec53aefb55ee984f04ccd27cde82d11bd62d871b53014240`.
 Teks layar self-test berbahasa **Inggris** (komentar kode tetap Turki) dan
 dicetak **3x lebih besar**: glif diambil dari HII font lalu tiap piksel
 digambar sebagai blok 3x3 ke framebuffer (cara yang sama dipakai
 `B2LGoster`), supaya mudah difoto.
-**Status: menunggu hasil flash `f49b7c7`** (hasil akan dicatat di sini).
+**Status: menunggu hasil flash `c97d78f`** (hasil akan dicatat di sini).
 
 ---
 
