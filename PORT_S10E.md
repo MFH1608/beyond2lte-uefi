@@ -5,9 +5,10 @@ Dokumen ini menjelaskan port proyek UEFI ini dari **S10+ (`beyond2lte`)** ke
 di sini hanya **perbedaan** dan **apa yang belum terbukti**.
 
 > Status jujur: ini **port tingkat sumber**. Belum ada satu pun baris di sini
-> yang sudah diuji di perangkat S10e. Semua nilai yang bisa diturunkan dari
-> SoC/dokumen sudah diturunkan; sisanya ditandai **VERIFIKASI** dan hanya bisa
-> ditutup dengan satu kali flash + satu kali boot.
+> yang sudah diuji di perangkat S10e. Yang bisa diturunkan dari SoC/dokumen
+> sudah diturunkan, dan DTB asli dari firmware stok sudah dipasang. Sisanya
+> (terutama `"Display Reserved"`) masih **VERIFIKASI** dan hanya bisa ditutup
+> dengan satu kali flash + satu kali boot.
 
 ---
 
@@ -24,8 +25,8 @@ S10e, S10, dan S10+ **memakai SoC yang sama** (Exynos 9820 / S5E9820) dan
 | Driver diagnostik `B2L*` (Goster, BootTani, RtHook, Seh, GicSus, Touch) | **sama**, disalin ke paket baru |
 | `MemoryMapLib` | **BERBEDA** (6 GiB vs 8 GiB) |
 | `PcdFrameBuffer*` | **BERBEDA** (1080×2280 vs 1440×3040) |
-| `Resources/DTBs/beyond0lte.*` | **BELUM ADA yang asli** (lihat §5) |
-| `KeypadDeviceLib` GPIO | kemungkinan sama, **VERIFIKASI** |
+| `Resources/DTBs/beyond0lte.*` | **BERBEDA** — DTB asli S10e (dari firmware stok), lihat §5 |
+| `KeypadDeviceLib` GPIO | **sama** — terverifikasi vs DTB asli (§6) |
 
 Pembagian build Mu-Silicium tidak memakai daftar pusat: `build_uefi.py`
 mencari `Platforms/*/<nama>Pkg` dan membaca `Resources/Configs/<nama>.toml`.
@@ -132,7 +133,7 @@ dipakai bersama oleh `beyond0ltePkg`.
 ```
 mu-silicium-overlay/Platforms/Samsung/beyond0ltePkg/   (salinan beyond2ltePkg + edit di §2)
 mu-silicium-overlay/Resources/Configs/beyond0lte.toml
-mu-silicium-overlay/Resources/DTBs/beyond0lte.dts/.dtb  ← SEMENTARA, lihat §5
+mu-silicium-overlay/Resources/DTBs/beyond0lte.dts/.dtb  ← DTB asli S10e, lihat §5
 tools_dtb_s10e.sh                                        ← pembuat DTB asli
 tools_dtbo_extract.py                                    ← pengurai dtbo.img/dt.img
 PORT_S10E.md                                             ← dokumen ini
@@ -164,8 +165,9 @@ bash yap.sh -d beyond0lte --clean # beyond0lte (S10e)
 # 0) Sumber: lihat BUILD.md. overlay harus sudah disalin ke ~/Mu-Silicium.
 #    yap.sh melakukan penyalinan itu sendiri (cp -r mu-silicium-overlay/.).
 
-# 1) DTB asli S10e (WAJIB dilakukan sebelum build pertama yang serius):
-bash tools_dtb_s10e.sh --fdt s10e-fdt.dtb
+# 1) (opsional) perbarui DTB asli. Repo sudah memuat DTB asli S10e
+#    (EUR OPEN 25); langkah ini hanya bila Anda ingin regenerasi:
+bash tools_dtb_s10e.sh --tar AP_G970F....tar.md5
 python3 tools_reserved_memory_audit.py --device beyond0lte --check
 
 # 2) Build
@@ -190,46 +192,53 @@ UEFI kita jauh di bawahnya.
 
 ---
 
-## 5. DTB: yang sekarang ada adalah placeholder
+## 5. DTB: sekarang DTB asli S10e (sudah terpasang)
 
 `build_uefi.py` **mengharuskan** `Resources/DTBs/beyond0lte.dtb` ada
-(`append_dtb = true`) dan akan menghentikan build kalau tidak ada. Karena DTB
-asli S10e belum tersedia, yang duduk di repo saat ini adalah DTB `beyond2lte`
-yang hanya diubah `model`-nya. Isi lain — terutama `reserved-memory` dan
-revisi board — **milik S10+**.
+(`append_dtb = true`) dan akan menghentikan build kalau tidak ada.
 
-Kenapa ini tidak meledak: UEFI tidak membaca DTB saat runtime (`DtPlatformDxe`
-dinonaktifkan di FDF). DTB di sini hanya ikut di dalam boot image.
+Yang duduk di repo sekarang **bukan lagi placeholder**, melainkan DTB asli S10e
+yang diekstrak dari firmware stok `G970FXXUHHXJ1` (CSC XID, Android 12):
 
-Kenapa tetap harus diganti: `tools_reserved_memory_audit.py` membaca DTB untuk
-memastikan setiap region dengan `reg` tetap di-`Reserved` untuk Windows.
-Memakai daftar S10+ berarti **mungkin ada region S10e yang tidak terlindungi** —
-persis pola yang dulu menghasilkan `SYSTEM_THREAD_EXCEPTION_NOT_HANDLED (0x7E)`.
+- `base` = entri di `dt.img` (Samsung menyimpannya sebagai tabel DTBO 1 entri).
+- `overlay` = entri `dtbo.img` yang cocok dengan `beyond0lte`.
+- Digabung dengan `fdtoverlay`; `model` dari overlay **tidak ditimpa**.
 
-Cara mendapatkan DTB asli — termudah dari perangkat yang sudah boot:
+Hasilnya: `model = "Samsung BEYOND0LTE EUR OPEN 25 board based on EXYNOS9820"`,
+3 bank memori (total 6.00 GiB), `reserved-memory`, `sec_rdx_bootdev`, `seclog`,
+`modem_spare` semua ada.
 
-```bash
-# S10e dengan root (stock/LineageOS):
-adb shell su -c 'cat /sys/firmware/fdt' > s10e-fdt.dtb
-bash tools_dtb_s10e.sh --fdt s10e-fdt.dtb
-```
+`dtbo.img` S10e memuat **7 entri**, semuanya `BEYOND0LTE` dan hanya berbeda
+revisi board (`EUR OPEN 17..25`). Skrip memilih **revisi tertinggi** sebagai
+default; kalau ingin entri lain, pakai `--index`.
 
-Alternatif dari firmware stok, sekarang **otomatis** (tidak perlu `mkdtimg`):
+Cara menghasilkan/memperbarui DTB asli (tidak perlu `mkdtimg`):
 
 ```bash
-# base diambil dari dt.img, overlay dipilih dari dtbo.img berdasarkan
-# model/compatible yang menyebut "beyond0lte"
+# 1) cara termudah, dari firmware stok (otomatis base + overlay):
 bash tools_dtb_s10e.sh --tar AP_G970F....tar.md5
 
-# kalau ingin melihat dulu semua entri dtbo.img:
-python3 tools_dtbo_extract.py --dtbo dtbo.img --list
-# lalu pilih manual bila perlu:
-python3 tools_dtbo_extract.py --dtbo dtbo.img --index 3 --out overlay.dtb
+# 2) atau dari perangkat yang sudah boot:
+adb shell su -c 'cat /sys/firmware/fdt' > s10e-fdt.dtb
+bash tools_dtb_s10e.sh --fdt s10e-fdt.dtb
+
+# 3) menelusuri manual bila perlu:
+python3 tools_dtbo_extract.py --dtbo dtbo.img --list      # lihat 7 entri
+python3 tools_dtbo_extract.py --dtbo dtbo.img --index 6 --out overlay.dtb
 bash tools_dtb_s10e.sh --base base.dtb --overlay overlay.dtb
 ```
 
-Setelah DTB asli masuk, **jalankan ulang audit**; setiap region yang muncul
-`ACIK` harus ditambahkan ke `MemoryMapLib.c` sebagai `Reserv`.
+Setelah DTB berubah, **jalankan ulang audit**:
+
+```bash
+python3 tools_reserved_memory_audit.py --device beyond0lte --check
+```
+
+Setiap region yang muncul `ACIK` harus ditambahkan ke `MemoryMapLib.c` sebagai
+`Reserv`. Audit DTB asli S10e **lulus**: semua 23 region `reg` tetap sudah
+terlindungi, **tidak ada region baru** yang perlu ditambahkan. Perbedaan
+dibanding DTB S10+ hanya ukuran region `camera` (S10e 228 MiB vs S10+ 450 MiB),
+dan keduanya sudah tertutup "Memori dinamis bawah" yang ada.
 
 ---
 
@@ -237,15 +246,26 @@ Setelah DTB asli masuk, **jalankan ulang audit**; setiap region yang muncul
 
 Urut dari yang paling mungkin membuat flash pertama gagal:
 
-1. **Region `"Display Reserved"` S10e** (§2.2). Lihat gejala di atas.
-2. **GPIO tombol.** `KeypadDeviceLib` memakai `Bank A pin 3/4` (vol up/down),
-   `Bank 2 A pin 4` (power), `Bank A pin 6` (tombol khusus/Bixby). Di S10e
-   tombol daya menyatu dengan fingerprint dan bisa berada di bank berbeda.
-   Ini tidak menghalangi boot — hanya tombol yang tidak berfungsi di menu.
-   Cara menguji cepat: tombol volume harus menggerakkan pilihan menu.
-3. **PIT/UH S10e.** Region `Samsung U-H EL2` (`0x87000000`, 2 MiB) dipertahankan
+1. **Region `"Display Reserved"` S10e** (§2.2). Masih **asumsi** (diambil dari
+   S10+/`beyond1lte`: `0xCA000000`, 20 MiB) karena region ini disetel oleh
+   S-Boot, bukan oleh DTB. Lihat gejala di atas.
+2. **PIT/UH S10e.** Region `Samsung U-H EL2` (`0x87000000`, 2 MiB) dipertahankan
    dari S10+; verifikasi ukuran `UH` di PIT S10e.
-4. **DTB placeholder** (§5).
+3. **Revisi board fisik.** DTB memakai `EUR OPEN 25` (revisi tertinggi yang
+   tersedia). Kalau perangkat Anda rev. lebih lama, ganti dengan `--index N`;
+   perbedaannya kecil, tetapi ini yang paling benar.
+4. **Build/perangkat belum diuji sama sekali.** Belum ada satu baris pun yang
+   dikompilasi atau dijalankan di S10e. Semua verifikasi sejauh ini bersifat
+   statis (source + DTB asli).
+
+Yang **sudah terverifikasi dari DTB asli** (bukan lagi dugaan):
+
+- **GPIO tombol** cocok persis dengan `KeypadDeviceLib`: power `gpa2-4`
+  (Bank 2/A pin 4), vol up `gpa0-3`, vol down `gpa0-4`, tombol khusus
+  (Bixby) `gpa0-6` — semuanya `BankId = A`, sama seperti S10+.
+- **Panel** `s6e3fa7_beyond0` melaporkan `mres_width = 0x438` (1080) dan
+  `mres_height = 0x8e8` (2280), sesuai PCD framebuffer.
+- **Memori** 6 GiB dalam 3 bank; **tidak ada** baris `0x980000000`.
 
 Yang **tidak** diharapkan bermasalah: UFS, ACPI, PSCI/SMP, EFI Shell, dan
 mekanisme boot secara keseluruhan — semuanya level SoC.

@@ -37,8 +37,9 @@ flash/geri dönüş: [`PORT_S10E.md`](PORT_S10E.md). Derleme:
 bash yap.sh -d beyond0lte --acpi --clean
 ```
 
-> Durum: bu port **kaynak düzeyinde** tamamdır; S10e üzerinde **henüz
-> flaşlanıp denenmedi**. DTB de henüz gerçek S10e DTB'si değil (§13).
+> Durum: bu port **kaynak düzeyinde** tamamdır ve gerçek S10e DTB'si (stok
+> firmware'den) depoya konmuştur; yine de S10e üzerinde **henüz flaşlanıp
+> denenmedi**. Kalan tek gerçek varsayım `"Display Reserved"` bölgesidir (§13).
 
 Kısıtlar:
 
@@ -1916,14 +1917,24 @@ giriyor. Bu bir bugcheck'e mal oldu (`SYSTEM_THREAD_EXCEPTION_NOT_HANDLED`).
 - `boot.wim`'in orijinal `Start` değerleri hiç kaydedilmedi; geri dönüş için
   ISO'daki dokunulmamış kopyadan okunmalı
 - **S10e (`beyond0lte`) portu** kaynak düzeyinde hazır ama cihazda denenmedi:
-  - `Resources/DTBs/beyond0lte.dtb` hâlâ **placeholder** (beyond2lte DTB'sinin
-    yalnız `model` alanı değiştirilmiş hâli). Gerçeği üretmek için:
-    `bash tools_dtb_s10e.sh --tar AP_G970F....tar.md5` (artık `mkdtimg`
-    gerekmiyor) veya cihazdan `adb shell su -c 'cat /sys/firmware/fdt'`.
-  - `"Display Reserved"` bölgesinin (`0xCA000000`, 20 MiB) S10e'de aynı olduğu
-    **varsayım**; 1080-wide panelde DECON stride farkı olabilir.
-  - Tuş GPIO'ları (özellikle güç/fingerprint birleşik tuş) doğrulanmadı.
-  - Ayrıntı ve flash/geri dönüş: `PORT_S10E.md`.
+  - `Resources/DTBs/beyond0lte.dtb` artık **gerçek S10e DTB'si**: stok
+    `G970FXXUHHXJ1` firmware'inden `dt.img` (base) + `dtbo.img` (EUR OPEN 25
+    board overlay) `fdtoverlay` ile birleştirildi. 3 bank / 6.00 GiB.
+  - Ayrılmış bellek denetimi (`tools_reserved_memory_audit.py --device
+    beyond0lte`) **geçti**: 23 sabit `reg` bölgesinin tümü zaten korunuyor,
+    `MemoryMapLib.c`'ye **eklenecek yeni bölge yok**. S10+'a göre tek fark
+    `camera` boyutu (228 MiB vs 450 MiB); ikisi de mevcut "alt dinamik koruma"
+    altında kalıyor.
+  - Tuş GPIO'ları DTB ile **doğrulandı**: güç `gpa2-4`, ses aç `gpa0-3`,
+    ses kıs `gpa0-4`, özel tuş `gpa0-6` — `KeypadDeviceLib` ile birebir.
+  - Panel `s6e3fa7_beyond0` = 1080×2280 (`mres_width=0x438`,
+    `mres_height=0x8e8`), PCD çerçeve tamponuyla uyumlu.
+  - Hâlâ **varsayım**: `"Display Reserved"` bölgesi (`0xCA000000`, 20 MiB) —
+    bu bölge DTB'den değil S-Boot'tan gelir, S10+'taki değer korunuyor.
+  - Fiziksel board revizyonu bilinmiyor; DTB en yüksek revizyonu (`EUR OPEN
+    25`) kullanıyor. Gerekirse `--index N`.
+  - Hiç derleme/cihaz testi yapılmadı. Ayrıntı ve flash/geri dönüş:
+    `PORT_S10E.md`.
 
 ---
 
