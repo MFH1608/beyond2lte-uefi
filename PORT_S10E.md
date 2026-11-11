@@ -343,10 +343,10 @@ Yang ditampilkan (dan nilai yang benar):
 | `Display` | mode GOP aktif | 1080×2280 |
 | `RAM` | total DRAM terdeskripsi + memori bebas | ≈ `6144 MB` (6 GiB); free ≠ 0 |
 | `Memmap` | jumlah descriptor + alamat akhir tertinggi | `max end 0x980000000` |
-| `RAM >=0x980000000` | sanity DRAM S10e | `yok (dogru)` |
+| `RAM >=0x980000000` | sanity DRAM S10e | `none (ok)` |
 | `Block IO` | perangkat block terpasang | UFS ≈ 122 GB |
 | `FAT/FS` | volume FAT terpasang | `0 volume` (memang belum ada ESP) |
-| `Touch` | `EFI_ABSOLUTE_POINTER_PROTOCOL` | `AbsolutePointer var` |
+| `Touch` | `EFI_ABSOLUTE_POINTER_PROTOCOL` | `AbsolutePointer present` |
 | `Key` / `Touch` (bawah) | uji tombol/sentuh live | berubah saat ditekan |
 
 Kalau `RAM` menunjukkan **8192 MB**, itu tanda bank S10+ (`0x980000000..0xA00000000`)
@@ -445,10 +445,11 @@ Interpretasi: `co` naik dan `hit` naik saat layar disentuh = jalur sentuh
 hidup; `poll` naik tetapi `empty` ikut naik dan `co=0` = kontroler masih
 belum mengirim event; `err` naik = masalah I2C.
 
-Bundle build `6b683c1`: `uefi-boot.tar` SHA-256
-`6ec796c1c1aa2439ed12f497a796a5821d40ef8712799d9894fe47332af26327`,
+Bundle build `692a57d`: `uefi-boot.tar` SHA-256
+`ec1d5c0cd0b47042273f5e8a6d7934c0b592f320ceaa82176670784c519eae9e`,
 `Mu-beyond0lte.img` SHA-256
-`82b0a450c0a1091b67d23203ddef5571d21273b0a34a597f69150104aa43bb6e`.
+`73c505dd19d6e6cc6ea7688d1a2f03ea2bd7494091c9fdc62b175a6eb995b8a8`.
+Teks layar self-test berbahasa **Inggris** (komentar kode tetap Turki).
 **Status: menunggu pengujian ulang di perangkat** (hasil akan dicatat di
 sini).
 
