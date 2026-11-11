@@ -103,20 +103,20 @@ B2LDrawMemory (
   MapSize = 0;
   Status  = gBS->GetMemoryMap (&MapSize, NULL, &MapKey, &DescSize, &DescVer);
   if (EFI_ERROR (Status) && (Status != EFI_BUFFER_TOO_SMALL)) {
-    Print (L"RAM     : GetMemoryMap probe hatasi (%r)\r\n", Status);
+    Print (L"RAM     : GetMemoryMap probe error (%r)\r\n", Status);
     return;
   }
 
   MapSize += 8 * DescSize;
   Map      = AllocatePool (MapSize);
   if (Map == NULL) {
-    Print (L"RAM     : bellek ayrilamadi\r\n");
+    Print (L"RAM     : allocation failed\r\n");
     return;
   }
 
   Status = gBS->GetMemoryMap (&MapSize, Map, &MapKey, &DescSize, &DescVer);
   if (EFI_ERROR (Status)) {
-    Print (L"RAM     : GetMemoryMap hatasi (%r)\r\n", Status);
+    Print (L"RAM     : GetMemoryMap error (%r)\r\n", Status);
     FreePool (Map);
     return;
   }
@@ -161,7 +161,7 @@ B2LDrawMemory (
          (UINT32)DivU64x32 (FreeRam, 1024 * 1024));
   Print (L"Memmap  : %u desc, max end 0x%lx\r\n", (UINT32)Count, Highest);
   Print (L"RAM >=0x980000000  : %a\r\n",
-         AboveLimit ? "ADA (SALAH)" : "yok (dogru)");
+         AboveLimit ? "PRESENT (WRONG)" : "none (ok)");
 
   FreePool (Map);
 }
@@ -189,7 +189,7 @@ B2LDrawDevices (
                    &Handles
                    );
   if (EFI_ERROR (Status)) {
-    Print (L"Block IO: yok (%r)\r\n", Status);
+    Print (L"Block IO: none (%r)\r\n", Status);
   } else {
     Print (L"Block IO: %u device\r\n", (UINT32)HandleCount);
     Shown = 0;
@@ -243,7 +243,7 @@ B2LDrawDisplay (
            Gop->Mode->Info->VerticalResolution,
            Gop->Mode->Mode);
   } else {
-    Print (L"Display : GOP yok (%r)\r\n", Status);
+    Print (L"Display : no GOP (%r)\r\n", Status);
   }
 }
 
@@ -280,12 +280,12 @@ B2LSelfTest (
     gST->ConOut->SetAttribute (gST->ConOut, EFI_WHITE | EFI_BACKGROUND_BLACK);
   }
 
-  UnicodeSPrint (LastKey, sizeof (LastKey), L"(henuz yok)");
-  UnicodeSPrint (LastTouch, sizeof (LastTouch), L"(henuz yok)");
+  UnicodeSPrint (LastKey, sizeof (LastKey), L"(not yet)");
+  UnicodeSPrint (LastTouch, sizeof (LastTouch), L"(not yet)");
 
   Print (L"==============================================================\r\n");
   Print (L"  S10e (beyond0lte) - UEFI SELF TEST\r\n");
-  Print (L"  OS/ESP yok; bu ekran dogrulama icindir. Fotografla.\r\n");
+  Print (L"  No OS/ESP; this screen is for verification. Photograph it.\r\n");
   Print (L"==============================================================\r\n");
 
   B2LDrawDisplay ();
@@ -294,7 +294,7 @@ B2LSelfTest (
 
   Status   = gBS->LocateProtocol (&gEfiAbsolutePointerProtocolGuid, NULL, (VOID **)&Abs);
   HasTouch = !EFI_ERROR (Status);
-  Print (L"Touch   : %a\r\n", HasTouch ? "AbsolutePointer var" : "yok");
+  Print (L"Touch   : %a\r\n", HasTouch ? "AbsolutePointer present" : "none");
   if (HasTouch && (Abs->Mode != NULL)) {
     Print (L"Touch.m : %u x %u\r\n",
            (UINT32)Abs->Mode->AbsoluteMaxX,
@@ -314,7 +314,7 @@ B2LSelfTest (
                   );
   if (EFI_ERROR (Status) || (TouchDiag == NULL)) {
     TouchDiag = NULL;
-    Print (L"Touch.fn: teshis protokolu yok\r\n");
+    Print (L"Touch.fn: no diag protocol\r\n");
   } else {
     Print (
       L"Touch.fn: be=%02x%02x af=%02x%02x pm=%02x ok=%u\r\n",
@@ -328,8 +328,8 @@ B2LSelfTest (
   }
 
   Print (L"--------------------------------------------------------------\r\n");
-  Print (L"VolUp=Up  VolDown=Down  Bixby=Enter  Bixby(tahan)=Esc\r\n");
-  Print (L"Sentuh layar -> Touch.dx hit artmali; cikis: Bixby(tahan)+Volume\r\n");
+  Print (L"VolUp=Up  VolDown=Down  Bixby=Enter  Bixby(hold)=Esc\r\n");
+  Print (L"Touch panel -> Touch.dx hit should grow; exit: Bixby(hold)+Volume\r\n");
 
   if ((gST->ConOut != NULL) && (gST->ConOut->Mode != NULL)) {
     DynRow = (UINTN)gST->ConOut->Mode->CursorRow;
@@ -358,14 +358,14 @@ B2LSelfTest (
         } else if (Key.ScanCode == SCAN_DOWN) {
           UnicodeSPrint (LastKey, sizeof (LastKey), L"Volume Down -> SCAN_DOWN (0x02)");
         } else if (Key.ScanCode == SCAN_ESC) {
-          UnicodeSPrint (LastKey, sizeof (LastKey), L"Bixby tahan -> SCAN_ESC (0x17)");
+          UnicodeSPrint (LastKey, sizeof (LastKey), L"Bixby hold -> SCAN_ESC (0x17)");
         } else if (Key.UnicodeChar == CHAR_CARRIAGE_RETURN) {
-          UnicodeSPrint (LastKey, sizeof (LastKey), L"Bixby singkat -> ENTER (0x0D)");
+          UnicodeSPrint (LastKey, sizeof (LastKey), L"Bixby short -> ENTER (0x0D)");
         } else if ((Key.ScanCode == SCAN_LEFT) || (Key.ScanCode == SCAN_RIGHT)) {
           UnicodeSPrint (
             LastKey,
             sizeof (LastKey),
-            L"Bixby+Vol -> %a (cikis)",
+            L"Bixby+Vol -> %a (exit)",
             (Key.ScanCode == SCAN_LEFT) ? "LEFT" : "RIGHT"
             );
           Exit = TRUE;
@@ -448,7 +448,7 @@ B2LSelfTest (
     gST->ConOut->SetCursorPosition (gST->ConOut, 0, DynRow);
   }
 
-  Print (L"Cikiliyor; cihaz kapatilacak.                    \r\n");
+  Print (L"Exiting; device will power off.                    \r\n");
   Print (L"                                                  \r\n");
   gBS->Stall (2000000);
 }
