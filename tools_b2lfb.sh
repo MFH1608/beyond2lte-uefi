@@ -62,11 +62,17 @@ set -euo pipefail
 # negatif yuklenebilirlik kaniti olamaz. ErrorControl=3 sayesinde b2lsys
 # icin imza/yukleme reddi de sessizce atlanmaz.
 #
-B2L_MOD="${1:-kur}"
-case "$B2L_MOD" in
-  kur|kapat|ac|kontrol) ;;
-  *) echo "Kullanim: bash $0 [kur|kapat|ac|kontrol]"; exit 1 ;;
-esac
+B2L_MOD="kur"
+DEV="${B2L_DEVICE:-beyond2lte}"
+while [ $# -gt 0 ]; do
+  case "$1" in
+    # Cihaz yalnizca imza aciklamalarini ve masaustu klasorunu etkiler.
+    -d|--device) DEV="${2:?-d icin cihaz adi gerekli}"; shift ;;
+    kur|kapat|ac|kontrol) B2L_MOD="$1" ;;
+    *) echo "Kullanim: bash $0 [-d cihaz] [kur|kapat|ac|kontrol]"; exit 1 ;;
+  esac
+  shift
+done
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SRC="$HERE/windows/b2lfb"
 WIM="$HERE/esp/sources/boot.wim"
@@ -271,6 +277,9 @@ CERT="$HERE/windows/b2lfb/b2l-test.pem"
 KEY="$HERE/windows/b2lfb/b2l-test.key"
 if [ ! -s "$CERT" ] || [ ! -s "$KEY" ]; then
   say "Test sertifikasi uretiliyor (bir kereye mahsus)"
+  # CN bilerek CIHAZDAN BAGIMSIZ: ayni kok sertifika iki cihazin da guven
+  # deposuna bir kez eklenir. Imza ACIKLAMALARI cihazi belirtir (${DEV}), CN
+  # degismez.
   openssl req -x509 -newkey rsa:2048 -nodes -days 3650 \
     -keyout "$KEY" -out "$CERT" \
     -subj "/CN=beyond2lte test signing" 2>/dev/null
@@ -282,19 +291,19 @@ fi
 
 say "Imzalaniyor"
 osslsigncode sign -certs "$CERT" -key "$KEY" \
-  -n "beyond2lte framebuffer" -h sha256 \
+  -n "${DEV} framebuffer" -h sha256 \
   -in "$OUT/b2lfb.sys" -out "$OUT/b2lfb-signed.sys" 2>&1 | sed 's/^/  /'
 mv -f "$OUT/b2lfb-signed.sys" "$OUT/b2lfb.sys"
 osslsigncode sign -certs "$CERT" -key "$KEY" \
-  -n "beyond2lte system-group checkpoint" -h sha256 \
+  -n "${DEV} system-group checkpoint" -h sha256 \
   -in "$OUT/b2lsg0.sys" -out "$OUT/b2lsg0-signed.sys" 2>&1 | sed 's/^/  /'
 mv -f "$OUT/b2lsg0-signed.sys" "$OUT/b2lsg0.sys"
 osslsigncode sign -certs "$CERT" -key "$KEY" \
-  -n "beyond2lte system-start checkpoint" -h sha256 \
+  -n "${DEV} system-start checkpoint" -h sha256 \
   -in "$OUT/b2lsys.sys" -out "$OUT/b2lsys-signed.sys" 2>&1 | sed 's/^/  /'
 mv -f "$OUT/b2lsys-signed.sys" "$OUT/b2lsys.sys"
 osslsigncode sign -certs "$CERT" -key "$KEY" \
-  -n "beyond2lte SCM checkpoint" -h sha256 \
+  -n "${DEV} SCM checkpoint" -h sha256 \
   -in "$OUT/b2lauto.sys" -out "$OUT/b2lauto-signed.sys" 2>&1 | sed 's/^/  /'
 mv -f "$OUT/b2lauto-signed.sys" "$OUT/b2lauto.sys"
 
@@ -474,6 +483,8 @@ cat > "$W/b2lfb.reg" <<'REG'
 "ImagePath"=str(2):"\\SystemRoot\\System32\\drivers\\b2lauto.sys"
 "DisplayName"="beyond2lte SCM checkpoint"
 REG
+# Heredoc tirnakli oldugu icin ${DEV} genisletilmedi; cihaz adini burada yaz.
+sed -i "s/beyond2lte/${DEV}/g" "$W/b2lfb.reg"
 hivexregedit --merge --prefix 'HKEY_LOCAL_MACHINE\SYSTEM' "$W/SYSTEM" "$W/b2lfb.reg"
 
 #

@@ -3,6 +3,7 @@
 # WinPE'yi RAM diskten degil GERCEK BIR BOLUMDEN acmak icin NTFS imaji uretir.
 #
 #   bash tools_windisk.sh [boyut_GiB]      varsayilan 3
+#   bash tools_windisk.sh -d beyond0lte     S10e icin masaustu klasor adi
 #
 # ---------------------------------------------------------------------------
 # NEDEN - FIKIR KULLANICIDAN GELDI VE HAKLIYDI
@@ -51,7 +52,17 @@ set -euo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 WIM="$HERE/esp/sources/boot.wim"
 OUT="$HERE/out"; mkdir -p "$OUT"
-GIB="${1:-3}"
+GIB=3
+DEV="${B2L_DEVICE:-beyond2lte}"
+
+while [ $# -gt 0 ]; do
+  case "$1" in
+    -d|--device) DEV="${2:?-d icin cihaz adi gerekli}"; shift ;;
+    -h|--help)   sed -n '2,6p' "$0"; exit 0 ;;
+    *)           GIB="$1" ;;
+  esac
+  shift
+done
 
 say() { printf '\n\033[1;36m==> %s\033[0m\n' "$*"; }
 
@@ -140,10 +151,10 @@ ls -lh "$OUT/system-esp.tar"
 for p in /mnt/c/Users/*/OneDrive/Masa*st* /mnt/c/Users/*/OneDrive/Desktop \
          /mnt/c/Users/*/Masa*st* /mnt/c/Users/*/Desktop; do
   [ -d "$p" ] || continue
-  mkdir -p "$p/beyond2lte-flash"
-  cp -f "$OUT/system-esp.tar" "$p/beyond2lte-flash/"
+  mkdir -p "$p/${DEV}-flash"
+  cp -f "$OUT/system-esp.tar" "$p/${DEV}-flash/"
   echo
-  echo "Masaustune kopyalandi: $p/beyond2lte-flash/system-esp.tar"
+  echo "Masaustune kopyalandi: $p/${DEV}-flash/system-esp.tar"
   echo "  Odin, AP slotu (Re-Partition ISARETSIZ) -> SYSTEM bolumu"
   break
 done

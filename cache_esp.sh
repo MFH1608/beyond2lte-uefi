@@ -59,9 +59,10 @@ BOSALT=0
 BASELINE=0
 PSCI_HVC=0
 BOOT_TANI=0
+DEV="${B2L_DEVICE:-beyond2lte}"
 ARGS=()
-for a in "$@"; do
-  case "$a" in
+while [ $# -gt 0 ]; do
+  case "$1" in
     --win)    WINONLY=1 ;;
     --linux)  LINUXOK=1 ;;
     --system) BIGPART=1 ;;
@@ -69,8 +70,12 @@ for a in "$@"; do
     --baseline) BASELINE=1 ;;
     --psci-hvc) PSCI_HVC=1 ;;
     --boot-tani) BOOT_TANI=1 ;;
-    *)        ARGS+=("$a") ;;
+    # Cihaz yalnizca masaustu klasor adini etkiler; bolum adlari (CACHE,
+    # SYSTEM) PIT'ten gelir ve iki cihazda aynidir.
+    -d|--device) DEV="${2:?-d icin cihaz adi gerekli}"; shift ;;
+    *)        ARGS+=("$1") ;;
   esac
+  shift
 done
 if [ ${#ARGS[@]} -gt 0 ]; then set -- "${ARGS[@]}"; else set --; fi
 
@@ -304,10 +309,10 @@ if [ "$BOSALT" = 1 ]; then
   for p in /mnt/c/Users/*/OneDrive/Masa*st* /mnt/c/Users/*/OneDrive/Desktop \
            /mnt/c/Users/*/Masa*st* /mnt/c/Users/*/Desktop; do
     [ -d "$p" ] || continue
-    mkdir -p "$p/beyond2lte-flash"
-    cp -f "$OUT/$PART-esp.tar" "$p/beyond2lte-flash/"
+    mkdir -p "$p/${DEV}-flash"
+    cp -f "$OUT/$PART-esp.tar" "$p/${DEV}-flash/"
     echo
-    echo "Masaustune kopyalandi: $p/beyond2lte-flash/$PART-esp.tar"
+    echo "Masaustune kopyalandi: $p/${DEV}-flash/$PART-esp.tar"
     echo "  Odin, AP slotu (Re-Partition ISARETSIZ)"
     break
   done
@@ -497,10 +502,10 @@ ls -lh "$IMG" "$OUT/$PART-esp.tar"
 for p in /mnt/c/Users/*/OneDrive/Masa*st* /mnt/c/Users/*/OneDrive/Desktop \
          /mnt/c/Users/*/Masa*st* /mnt/c/Users/*/Desktop; do
   [ -d "$p" ] || continue
-  mkdir -p "$p/beyond2lte-flash"
-  cp -f "$OUT/$PART-esp.tar" "$IMG" "$p/beyond2lte-flash/"
+  mkdir -p "$p/${DEV}-flash"
+  cp -f "$OUT/$PART-esp.tar" "$IMG" "$p/${DEV}-flash/"
   echo
-  echo "Masaustune kopyalandi: $p/beyond2lte-flash"
+  echo "Masaustune kopyalandi: $p/${DEV}-flash"
   echo "  $PART-esp.tar  -> Odin, AP slotu (Re-Partition ISARETSIZ)"
   echo "  $PART.img      -> recovery: adb push + dd"
   echo "  hedef bolum: $(echo "$PART" | tr a-z A-Z)"

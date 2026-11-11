@@ -134,6 +134,7 @@ mu-silicium-overlay/Platforms/Samsung/beyond0ltePkg/   (salinan beyond2ltePkg + 
 mu-silicium-overlay/Resources/Configs/beyond0lte.toml
 mu-silicium-overlay/Resources/DTBs/beyond0lte.dts/.dtb  ← SEMENTARA, lihat §5
 tools_dtb_s10e.sh                                        ← pembuat DTB asli
+tools_dtbo_extract.py                                    ← pengurai dtbo.img/dt.img
 PORT_S10E.md                                             ← dokumen ini
 ```
 
@@ -144,6 +145,9 @@ PORT_S10E.md                                             ← dokumen ini
 | `yap.sh` | Opsi `-d/--device` (default `beyond2lte`), semua jalur/keluaran memakai `$DEV` |
 | `tools_uefi_layout_check.py` | Opsi `--device` |
 | `tools_reserved_memory_audit.py` | Opsi `--device` |
+| `cache_esp.sh`, `tools_windisk.sh`, `tools_odin_winpe_bundle.sh` | Opsi `-d/--device`; nama berkas `$DEV-winpe-ufs.tar` dan folder Desktop `$DEV-flash` |
+| `tools_b2lfb.sh`, `tools_b2lufs.sh` | `-d/--device`; nama tampilan tanda tangan & `DisplayName` ikut `$DEV` (sertifikat tetap sama) |
+| `tests/test_boot_tani_safety.sh` | Memeriksa semua paket `*Pkg` (atau satu cihaz sebagai argumen) |
 
 Pemakaian lama tetap jalan tanpa argumen:
 
@@ -210,8 +214,19 @@ adb shell su -c 'cat /sys/firmware/fdt' > s10e-fdt.dtb
 bash tools_dtb_s10e.sh --fdt s10e-fdt.dtb
 ```
 
-Alternatif dari firmware stok (base `dt.img` + overlay `dtbo.img`) ada di
-`--base`/`--overlay` dan `--tar` pada `tools_dtb_s10e.sh --help`.
+Alternatif dari firmware stok, sekarang **otomatis** (tidak perlu `mkdtimg`):
+
+```bash
+# base diambil dari dt.img, overlay dipilih dari dtbo.img berdasarkan
+# model/compatible yang menyebut "beyond0lte"
+bash tools_dtb_s10e.sh --tar AP_G970F....tar.md5
+
+# kalau ingin melihat dulu semua entri dtbo.img:
+python3 tools_dtbo_extract.py --dtbo dtbo.img --list
+# lalu pilih manual bila perlu:
+python3 tools_dtbo_extract.py --dtbo dtbo.img --index 3 --out overlay.dtb
+bash tools_dtb_s10e.sh --base base.dtb --overlay overlay.dtb
+```
 
 Setelah DTB asli masuk, **jalankan ulang audit**; setiap region yang muncul
 `ACIK` harus ditambahkan ke `MemoryMapLib.c` sebagai `Reserv`.

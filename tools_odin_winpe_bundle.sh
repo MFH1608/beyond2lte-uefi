@@ -23,10 +23,24 @@ set -euo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 OUT="$HERE/out"
-BOOT_TAR="${1:-$OUT/uefi-boot.tar}"
-SYSTEM_RAW="${2:-$OUT/system.img}"
-CACHE_RAW="${3:-$OUT/cache.img}"
-BUNDLE="$OUT/beyond2lte-winpe-ufs.tar"
+
+DEV="${B2L_DEVICE:-beyond2lte}"
+POS=()
+while [ $# -gt 0 ]; do
+  case "$1" in
+    # Cihaz yalnizca cikti adini ve masaustu klasorunu etkiler; tar icindeki
+    # boot.img/system.img/cache.img adlari Odin hedefi oldugu icin sabittir.
+    -d|--device) DEV="${2:?-d icin cihaz adi gerekli}"; shift ;;
+    -h|--help)   sed -n '2,22p' "$0"; exit 0 ;;
+    *)           POS+=("$1") ;;
+  esac
+  shift
+done
+
+BOOT_TAR="${POS[0]:-$OUT/uefi-boot.tar}"
+SYSTEM_RAW="${POS[1]:-$OUT/system.img}"
+CACHE_RAW="${POS[2]:-$OUT/cache.img}"
+BUNDLE="$OUT/${DEV}-winpe-ufs.tar"
 
 say() { printf '\n\033[1;36m==> %s\033[0m\n' "$*"; }
 fail() { echo "HATA: $*" >&2; exit 1; }
@@ -104,16 +118,16 @@ for DESK in /mnt/c/Users/*/OneDrive/Masa*st* \
             /mnt/c/Users/*/Masa*st* \
             /mnt/c/Users/*/Desktop; do
   [ -d "$DESK" ] || continue
-  mkdir -p "$DESK/beyond2lte-flash"
-  cp -f "$BUNDLE" "$DESK/beyond2lte-flash/"
+  mkdir -p "$DESK/${DEV}-flash"
+  cp -f "$BUNDLE" "$DESK/${DEV}-flash/"
   echo
-  echo "Masaustune kopyalandi: $DESK/beyond2lte-flash/$(basename "$BUNDLE")"
+  echo "Masaustune kopyalandi: $DESK/${DEV}-flash/$(basename "$BUNDLE")"
   break
 done
 
-cat <<'SON'
+cat <<SON
 
-Hazir: out/beyond2lte-winpe-ufs.tar
+Hazir: out/${DEV}-winpe-ufs.tar
   Odin -> AP: bu TEK dosya
   Re-Partition: KAPALI
 

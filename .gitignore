@@ -15,3 +15,7 @@ stockfirmware/
 # Gecici
 *.log
 BUILDLOG*.txt
+
+# Python
+__pycache__/
+*.pyc

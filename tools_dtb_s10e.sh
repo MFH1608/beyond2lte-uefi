@@ -26,11 +26,17 @@
 #   2) Base + overlay ayri ayri:
 #        bash tools_dtb_s10e.sh --base dt.img-cikti.dtb --overlay dtbo-rev26.dtb
 #      Iki dosya fdtoverlay ile birlestirilir. Base, Samsung'un dt.img'inden
-#      cikarilir; overlay, dtbo.img icindeki board girdisidir. Ikisinin de
-#      nasil cikarilacagi PORT_S10E.md Bolum 2'de.
+#      cikarilir; overlay, dtbo.img icindeki board girdisidir. Ikisini de
+#      tools_dtbo_extract.py cikarir (asagidaki 3. yol).
 #
-#   3) Stock AP tar'indan otomatik (mkdtimg gerektirir):
+#   3) Stock AP tar'indan OTOMATIK (mkdtimg GEREKMEZ):
 #        bash tools_dtb_s10e.sh --tar AP_G970F....tar.md5
+#      tools_dtbo_extract.py dt.img'den base'i, dtbo.img'den model/compatible
+#      alaninda 'beyond0lte' gecen girdiyi secer ve fdtoverlay ile birlestirir.
+#      Girdileri once gormek icin:
+#        python3 tools_dtbo_extract.py --dtbo dtbo.img --list
+#      Yanlis girdi secilirse: --pick <anahtar> ya da
+#        python3 tools_dtbo_extract.py --dtbo dtbo.img --index N --out overlay.dtb
 #
 # Cikti (depoya yazilir):
 #   mu-silicium-overlay/Resources/DTBs/beyond0lte.dtb
@@ -44,14 +50,15 @@ OUT_DTB="$DTBDIR/beyond0lte.dtb"
 OUT_DTS="$DTBDIR/beyond0lte.dts"
 MODEL="Samsung BEYOND0LTE EUR OPEN 26 board based on EXYNOS9820"
 
-FDT=""; BASE=""; OVERLAY=""; TAR=""
+FDT=""; BASE=""; OVERLAY=""; TAR=""; DTB_PICK="beyond0lte"
 while [ $# -gt 0 ]; do
   case "$1" in
     --fdt)     FDT="$2"; shift 2 ;;
     --base)    BASE="$2"; shift 2 ;;
     --overlay) OVERLAY="$2"; shift 2 ;;
     --tar)     TAR="$2"; shift 2 ;;
-    -h|--help) sed -n '2,40p' "$0"; exit 0 ;;
+    --pick)    DTB_PICK="$2"; shift 2 ;;
+    -h|--help) sed -n '2,42p' "$0"; exit 0 ;;
     *) echo "Bilinmeyen secenek: $1"; exit 1 ;;
   esac
 done
@@ -81,19 +88,17 @@ elif [ -n "$BASE" ] && [ -n "$OVERLAY" ]; then
     || die "fdtoverlay basarisiz (base/overlay uyumsuz olabilir)"
 elif [ -n "$TAR" ]; then
   [ -f "$TAR" ] || die "tar yok: $TAR"
-  command -v mkdtimg >/dev/null || die "--tar icin mkdtimg gerekli (Android tools). Bunun yerine --fdt kullan."
-  say "tar'dan dt.img / dtbo.img cikariliyor"
-  mkdir -p "$WORK/tar"
-  tar -xf "$TAR" -C "$WORK/tar" dt.img dtbo.img 2>/dev/null \
-    || tar -xf "$TAR" -C "$WORK/tar" 2>/dev/null \
-    || die "tar acilamadi (md5'li tar olabilir; once .md5 uzantisini ele)"
-  # dtbo.img icindeki board girdilerini listele; secimi kullaniciya birak.
-  mkdtimg dump "$WORK/tar/dtbo.img" > "$WORK/dtbo-dump.txt" 2>/dev/null || true
-  echo "--- dtbo.img girdileri (dtbo-dump.txt) ---"
-  sed -n '1,40p' "$WORK/dtbo-dump.txt" || true
-  cp -f "$WORK/dtbo-dump.txt" "$DTBDIR/beyond0lte-dtbo-dump.txt" 2>/dev/null || true
-  die "Otomatik secim yapilmadi. yukaridaki dump'tan S10e girdisini secip \
-'--base <dt.img girdisi> --overlay <dtbo girdisi>' ile tekrar calistir."
+  [ -f "$PROJ/tools_dtbo_extract.py" ] || die "tools_dtbo_extract.py yok"
+  say "tar'dan base (dt.img) + S10e overlay (dtbo.img) seciliyor"
+  python3 "$PROJ/tools_dtbo_extract.py" --tar "$TAR" --dir "$WORK/tar" \
+    --pick "${DTB_PICK:-beyond0lte}" --quiet \
+    || die "DTB secilemedi (girdi tablosunu gormek icin: \
+python3 tools_dtbo_extract.py --dtbo <dtbo.img> --list)"
+  [ -s "$WORK/tar/base.dtb" ]    || die "base.dtb uretilmedi (tar'da dt.img yok olabilir)"
+  [ -s "$WORK/tar/overlay.dtb" ] || die "overlay.dtb uretilmedi (tar'da dtbo.img yok olabilir)"
+  say "fdtoverlay: base + overlay"
+  fdtoverlay -i "$WORK/tar/base.dtb" -o "$MERGED" "$WORK/tar/overlay.dtb" \
+    || die "fdtoverlay basarisiz (base/overlay uyumsuz olabilir)"
 else
   die "--fdt veya --base+--overlay veya --tar vermelisin (--help)"
 fi

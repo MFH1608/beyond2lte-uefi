@@ -25,6 +25,21 @@ Samsung Galaxy S10+ (SM-G975F) üzerinde **Windows on ARM** çalıştırmak.
 | Bootloader | Samsung S-Boot, kilidi açık |
 | TrustZone | Samsung TEEgris, EL3'te |
 
+### İkinci cihaz: Galaxy S10e (`beyond0lte`)
+
+Aynı proje 2026'da **S10e (SM-G970F, 6/128)** için de port edildi: SoC
+(Exynos 9820) ve S-Boot ailesi aynı. Cihaza özgü farklar yalnız üçe indi —
+RAM 6 GiB (`0x980000000` bankası **yok**), panel 1080×2280 ve ayrı bir platform
+paketi (`Platforms/Samsung/beyond0ltePkg`). Ayrıntı, doğrulanmamış noktalar ve
+flash/geri dönüş: [`PORT_S10E.md`](PORT_S10E.md). Derleme:
+
+```bash
+bash yap.sh -d beyond0lte --acpi --clean
+```
+
+> Durum: bu port **kaynak düzeyinde** tamamdır; S10e üzerinde **henüz
+> flaşlanıp denenmedi**. DTB de henüz gerçek S10e DTB'si değil (§13).
+
 Kısıtlar:
 
 - **Ek donanım yok.** UART, JTAG, USB debug kablosu, hepsi baştan elendi.
@@ -71,20 +86,22 @@ UEFI_beyond2lte/
 ├── kaydet.sh                git commit + push (Mac'te calisir)
 │
 ├── mu-silicium-overlay/     UEFI kaynak katmanı (Mu-Silicium uzerine kopyalanir)
-│   └── Platforms/Samsung/beyond2ltePkg/
-│       ├── beyond2lte.dsc            platform tanimi
-│       ├── Include/DXE.inc           firmware'e giren surucu listesi
-│       ├── Library/MemoryMapLib/     BELLEK HARITASI - en kritik dosya
-│       ├── Applications/
-│       │   ├── B2LGoster/            tani ekrani (buyuk puntolu)
-│       │   ├── B2LBootTani/           bootmgfw canlilik/ExitBootServices tanisi
-│       │   └── EbsTest/              ExitBootServices sonrasi kalp atisi
-│       └── Drivers/
-│           ├── B2LRtHookDxe/         UEFI calisma zamani servis kancalari
-│           ├── B2LSehDxe/            EL3 Smart Exception Handler + PSCI sorgusu
-│           ├── B2LGicSusDxe/         ExitBootServices'te GIC SPI susturma
-│           ├── B2LResetHookDxe/      (kullanim disi)
-│           └── B2LEl2Dxe/            (kullanim disi, hic calismadi)
+│   ├── Platforms/Samsung/beyond2ltePkg/
+│   │   ├── beyond2lte.dsc            platform tanimi
+│   │   ├── Include/DXE.inc           firmware'e giren surucu listesi
+│   │   ├── Library/MemoryMapLib/     BELLEK HARITASI - en kritik dosya
+│   │   ├── Applications/
+│   │   │   ├── B2LGoster/            tani ekrani (buyuk puntolu)
+│   │   │   ├── B2LBootTani/           bootmgfw canlilik/ExitBootServices tanisi
+│   │   │   └── EbsTest/              ExitBootServices sonrasi kalp atisi
+│   │   └── Drivers/
+│   │       ├── B2LRtHookDxe/         UEFI calisma zamani servis kancalari
+│   │       ├── B2LSehDxe/            EL3 Smart Exception Handler + PSCI sorgusu
+│   │       ├── B2LGicSusDxe/         ExitBootServices'te GIC SPI susturma
+│   │       ├── B2LResetHookDxe/      (kullanim disi)
+│   │       └── B2LEl2Dxe/            (kullanim disi, hic calismadi)
+│   └── Platforms/Samsung/beyond0ltePkg/   S10e portu: ayni suruculer,
+│                                       MemoryMapLib 6 GiB, panel 1080x2280
 │
 ├── silicium-acpi-overlay/SoCs/Samsung/S5E9820/
 │   ├── DSDT_minimal.dsl     CPU1-7 _STA=0, UFS0 dugumu kapali
@@ -103,6 +120,10 @@ UEFI_beyond2lte/
 ├── tools_winpe_sistem.sh    Start=1 sistem servisleri (liste/sadece/kapat/ac)
 ├── tools_wim_sikistirma.sh  boot.wim sikistirmasini degistirir
 ├── tools_winboot.sh         Windows acilis dosyalarini ESP'ye kurar
+├── tools_dtb_s10e.sh        GERCEK S10e DTB'sini uretir (base+overlay veya --fdt)
+├── tools_dtbo_extract.py    dtbo.img/dt.img cozucu (mkdtimg gerekmez)
+├── tools_uefi_layout_check.py    FD/stack/framebuffer cakismasi denetimi (--device)
+├── tools_reserved_memory_audit.py DTB rezervleri <-> MemoryMapLib denetimi (--device)
 ├── linux_test/              Linux kontrol deneyi (initramfs + init)
 ├── dtb-analiz/              stok DTB (dts) + cikarilan initcall listeleri
 ├── stockfirmware/           Samsung fabrika firmware'i (.tar.md5)
@@ -1874,6 +1895,11 @@ Mac'te çalışır, sonra WSL'de `git pull`.
 `SetVirtualAddressMap` sonrası sanal haritaya **girmiyor**; `RtData`
 giriyor. Bu bir bugcheck'e mal oldu (`SYSTEM_THREAD_EXCEPTION_NOT_HANDLED`).
 
+> S10e notu: bu tablo `beyond2lte` (8 GiB) içindir. S10e 6 GiB olduğundan
+> `0x980000000` DRAM bankası **yoktur** ve `beyond0ltePkg` içindeki
+> `MemoryMapLib.c` o bölgeyi tarif etmez. `0xCF...` günlük adresleri ve GIC
+> adresleri SoC düzeyinde olduğu için iki cihazda aynıdır.
+
 `RST_STAT` okuması: `0x20000000` yazılım sıfırlaması, `0x40010000` güç
 çevrimi.
 
@@ -1889,6 +1915,15 @@ giriyor. Bu bir bugcheck'e mal oldu (`SYSTEM_THREAD_EXCEPTION_NOT_HANDLED`).
 - `B2LEl2Dxe` ve `B2LResetHookDxe` kullanım dışı, kaynakları duruyor
 - `boot.wim`'in orijinal `Start` değerleri hiç kaydedilmedi; geri dönüş için
   ISO'daki dokunulmamış kopyadan okunmalı
+- **S10e (`beyond0lte`) portu** kaynak düzeyinde hazır ama cihazda denenmedi:
+  - `Resources/DTBs/beyond0lte.dtb` hâlâ **placeholder** (beyond2lte DTB'sinin
+    yalnız `model` alanı değiştirilmiş hâli). Gerçeği üretmek için:
+    `bash tools_dtb_s10e.sh --tar AP_G970F....tar.md5` (artık `mkdtimg`
+    gerekmiyor) veya cihazdan `adb shell su -c 'cat /sys/firmware/fdt'`.
+  - `"Display Reserved"` bölgesinin (`0xCA000000`, 20 MiB) S10e'de aynı olduğu
+    **varsayım**; 1080-wide panelde DECON stride farkı olabilir.
+  - Tuş GPIO'ları (özellikle güç/fingerprint birleşik tuş) doğrulanmadı.
+  - Ayrıntı ve flash/geri dönüş: `PORT_S10E.md`.
 
 ---
 

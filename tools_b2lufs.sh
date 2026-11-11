@@ -20,6 +20,10 @@
 set -euo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# Imza aciklamasi cihaza gore degisir; SERTIFIKA DEGISMEZ. b2lfb ile ayni
+# b2l-test.pem kullanilir cunku cihazin guven deposuna bir kez eklenen kok
+# iki cihazda da ayni olmali.
+DEV="${B2L_DEVICE:-beyond2lte}"
 SRC="$HERE/windows/b2lufs"
 OUT="$HERE/out/b2lufs"
 WIM="$HERE/esp/sources/boot.wim"
@@ -241,6 +245,7 @@ CERT="$HERE/windows/b2lfb/b2l-test.pem"
 KEY="$HERE/windows/b2lfb/b2l-test.key"
 if [ ! -s "$CERT" ] || [ ! -s "$KEY" ]; then
   say "Mevcut b2lfb test sertifikasi uretiliyor (bir kereye mahsus)"
+  # CN cihazdan bagimsiz; bkz. tools_b2lfb.sh.
   openssl req -x509 -newkey rsa:2048 -nodes -days 3650 \
     -keyout "$KEY" -out "$CERT" \
     -subj "/CN=beyond2lte test signing" 2>/dev/null
@@ -248,7 +253,7 @@ fi
 
 say "b2lufs.sys imzalaniyor"
 osslsigncode sign -certs "$CERT" -key "$KEY" \
-  -n "beyond2lte Exynos UFS StorPort LUN 0" -h sha256 \
+  -n "${DEV} Exynos UFS StorPort LUN 0" -h sha256 \
   -in "$OUT/b2lufs.sys" -out "$OUT/b2lufs-signed.sys" >/dev/null
 mv -f "$OUT/b2lufs-signed.sys" "$OUT/b2lufs.sys"
 
