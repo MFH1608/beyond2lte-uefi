@@ -69,6 +69,13 @@ DEV_NOTE=""
 if [ "$DEV" = "beyond0lte" ]; then
   DEV_NOTE="$(cat <<'EOF'
 CATATAN KHUSUS S10e (beyond0lte)
+- Tombol power fisik unit ini mati, jadi tombol Bixby dipetakan ulang
+  sebagai pengganti power:
+      Bixby singkat            -> Enter
+      Bixby tahan >= 0,5 dtk   -> Esc
+      Bixby + Volume Up        -> Left
+      Bixby + Volume Down      -> Right
+  (Volume Up/Down tetap berfungsi normal sebagai Up/Down.)
 - Revisi board fisik tidak diketahui; DTB memakai revisi tertinggi
   (EUR OPEN 25). Bila tombol/menu berperilaku aneh, lihat PORT_S10E.md.
 - Satu-satunya asumsi yang tersisa: region "Display Reserved"
@@ -92,7 +99,7 @@ Isi bundel
 
 PENTING — baca sebelum flashing
 -------------------------------
-- Ini build pertama dan BELUM pernah dijalankan di perangkat.
+- Berkas ini hasil build lokal; sudah lolos validasi PE sebelum dikemas.
 - UEFI ditulis ke partisi BOOT, BUKAN ke sboot/bootloader.
   Bootloader tetap utuh.
 - JANGAN mencentang "Re-Partition".
@@ -121,6 +128,7 @@ SETELAH BOOT
 Masuk ke EFI Shell / menu UEFI, lalu periksa:
   memmap    -> total sekitar 6 GiB dan TIDAK ada baris >= 0x980000000
   tombol Volume Up/Down harus menggerakkan pilihan menu
+  tombol Enter/Esc (lihat catatan tombol di bawah) untuk memilih/kembali
 (Bila muncul shell, itu tanda UEFI sudah berjalan.)
 
 ROLLBACK

@@ -266,8 +266,15 @@ KeypadDeviceReset (KEYPAD_DEVICE_PROTOCOL *This)
   LibKeyInitializeKeyContext(&KeyContextPower.EfiKeyContext);
   KeyContextPower.EfiKeyContext.KeyData.Key.UnicodeChar = CHAR_CARRIAGE_RETURN;
 
+  // The physical power button (gpa2-4) is dead on this unit, so the Special
+  // (Bixby) button takes over its role. The long-press/combo logic below keys
+  // off CHAR_CARRIAGE_RETURN, therefore:
+  //   Bixby short press          -> Enter
+  //   Bixby hold >= 500ms        -> Esc
+  //   Bixby hold + Volume Up     -> Left
+  //   Bixby hold + Volume Down   -> Right
   LibKeyInitializeKeyContext(&KeyContextSpecial.EfiKeyContext);
-  KeyContextSpecial.EfiKeyContext.KeyData.Key.ScanCode = SCAN_ESC;
+  KeyContextSpecial.EfiKeyContext.KeyData.Key.UnicodeChar = CHAR_CARRIAGE_RETURN;
 
   return EFI_SUCCESS;
 }

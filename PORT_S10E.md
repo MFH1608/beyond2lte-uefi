@@ -275,11 +275,10 @@ Urut dari yang paling mungkin membuat flash pertama gagal:
 3. **Revisi board fisik.** DTB memakai `EUR OPEN 25` (revisi tertinggi yang
    tersedia). Kalau perangkat Anda rev. lebih lama, ganti dengan `--index N`;
    perbedaannya kecil, tetapi ini yang paling benar.
-4. **Perangkat belum diuji sama sekali.** Firmware **sudah berhasil
-   dikompilasi** (lihat §4 dan `BUILD_LINUX.md`), tetapi belum pernah
-   dijalankan di S10e. Verifikasi sejauh ini = source + DTB asli + hasil build
-   (`Mu-beyond0lte.img` 4,4 MB, FD tepat 4 MiB di `0xC9000000`, 67 image
-   lolos validasi PE).
+4. ~~Perangkat belum diuji.~~ **Sudah diuji boot di S10e**: menu/EFI Shell
+   tampil, tombol Volume dan Bixby berfungsi. Firmware lolos validasi PE
+   (`Mu-beyond0lte.img` 4,4 MB, FD tepat 4 MiB di `0xC9000000`, 67 image).
+   Sisa catatan khusus unit uji: tombol power fisiknya mati (§6.1).
 
 Yang **sudah terverifikasi dari DTB asli** (bukan lagi dugaan):
 
@@ -292,6 +291,29 @@ Yang **sudah terverifikasi dari DTB asli** (bukan lagi dugaan):
 
 Yang **tidak** diharapkan bermasalah: UFS, ACPI, PSCI/SMP, EFI Shell, dan
 mekanisme boot secara keseluruhan — semuanya level SoC.
+
+### 6.1 Tombol power mati → digantikan Bixby
+
+Unit S10e uji ini tombol power fisiknya **mati**, sehingga `Enter`,
+`Left`, dan `Right` (yang semuanya berasal dari tombol power) hilang. Di
+`beyond0ltePkg/Library/KeypadDeviceLib/KeypadDeviceLib.c`, tombol Bixby
+(`gpa0-6`) kini dipetakan dengan `UnicodeChar = CHAR_CARRIAGE_RETURN`
+(bukan lagi `SCAN_ESC`). Logika long-press/combo yang sudah ada di
+`LibKeyUpdateKeyStatus` otomatis memberi:
+
+| Aksi | Hasil |
+| --- | --- |
+| Bixby, tekan singkat | `Enter` |
+| Bixby, tahan ≥ 0,5 dtk | `Esc` |
+| Bixby tahan + Volume Up | `Left` |
+| Bixby tahan + Volume Down | `Right` |
+| Volume Up / Volume Down | `Up` / `Down` (tidak berubah) |
+
+Kombinasi `Left`/`Right` hanya terpicu bila tombol volume sudah ditahan
+sebelum Bixby melewati 0,5 dtk (perilaku sama seperti tombol power asli).
+
+Perubahan ini **hanya** di `beyond0ltePkg`; salinan di `beyond2ltePkg`
+tidak disentuh, jadi perilaku S10+ tetap seperti semula.
 
 ---
 
