@@ -130,6 +130,13 @@
   #
   KeypadDeviceLib|beyond0ltePkg/Library/KeypadDeviceLib/KeypadDeviceLib.inf
 
+  #
+  # Boot manager. Varsayilan (SiliciumNullPkg) "no OS" aninda cihazi kapatir.
+  # Bizimki yerine S10e donanim self-test ekranini cizer: klavye/ESP olmadan
+  # dogrulama icin. Yalnizca beyond0lte'ye bagli; beyond2lte etkilenmez.
+  #
+  DeviceBootManagerLib|beyond0ltePkg/Library/PlatformBootManagerLib/B2LPlatformBootManagerLib.inf
+
 [Components]
   #
   # UEFI Shell (firmware volume'a gomulu - USB ya da ESP gerektirmez)
