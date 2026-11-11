@@ -8,6 +8,10 @@ stockfirmware/
 *.tar.md5
 !Resources/**/*.img
 
+# Derleme ciktilari (yap.sh uretir)
+out/
+esp/*.EFI
+
 # macOS
 .DS_Store
 ._*

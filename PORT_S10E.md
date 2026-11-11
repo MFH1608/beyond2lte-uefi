@@ -162,8 +162,8 @@ bash yap.sh -d beyond0lte --clean # beyond0lte (S10e)
 ## 4. Build dan flash
 
 ```bash
-# 0) Sumber: lihat BUILD.md. overlay harus sudah disalin ke ~/Mu-Silicium.
-#    yap.sh melakukan penyalinan itu sendiri (cp -r mu-silicium-overlay/.).
+# 0) Sumber: lihat BUILD.md (WSL) atau BUILD_LINUX.md (Linux native,
+#    tanpa sudo). Overlay disalin oleh yap.sh sendiri.
 
 # 1) (opsional) perbarui DTB asli. Repo sudah memuat DTB asli S10e
 #    (EUR OPEN 25); langkah ini hanya bila Anda ingin regenerasi:
@@ -174,8 +174,10 @@ python3 tools_reserved_memory_audit.py --device beyond0lte --check
 bash yap.sh -d beyond0lte --acpi --clean
 ```
 
-Hasil: `Mu-beyond0lte.img` (dan `Mu-beyond0lte-<model>.img`), `uefi-boot.tar`,
-disalin ke `out/` dan ke folder `beyond0lte-flash/` di Desktop.
+Status: **build ini sudah terbukti berhasil** di Linux native (clang 23 /
+`CLANGPDB`, target `aarch64-unknown-windows-msvc`). Hasil: `Mu-beyond0lte.img`
+(4,4 MB), `uefi-boot.tar`, disalin ke `out/` dan ke folder `beyond0lte-flash/`
+di Desktop. Isi boot image dan catatan kompiler: `BUILD_LINUX.md`.
 
 Flash = sama seperti S10+ (BUILD.md §6):
 
@@ -254,9 +256,11 @@ Urut dari yang paling mungkin membuat flash pertama gagal:
 3. **Revisi board fisik.** DTB memakai `EUR OPEN 25` (revisi tertinggi yang
    tersedia). Kalau perangkat Anda rev. lebih lama, ganti dengan `--index N`;
    perbedaannya kecil, tetapi ini yang paling benar.
-4. **Build/perangkat belum diuji sama sekali.** Belum ada satu baris pun yang
-   dikompilasi atau dijalankan di S10e. Semua verifikasi sejauh ini bersifat
-   statis (source + DTB asli).
+4. **Perangkat belum diuji sama sekali.** Firmware **sudah berhasil
+   dikompilasi** (lihat §4 dan `BUILD_LINUX.md`), tetapi belum pernah
+   dijalankan di S10e. Verifikasi sejauh ini = source + DTB asli + hasil build
+   (`Mu-beyond0lte.img` 4,4 MB, FD tepat 4 MiB di `0xC9000000`, 67 image
+   lolos validasi PE).
 
 Yang **sudah terverifikasi dari DTB asli** (bukan lagi dugaan):
 

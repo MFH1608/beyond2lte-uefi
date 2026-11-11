@@ -37,9 +37,10 @@ flash/geri dönüş: [`PORT_S10E.md`](PORT_S10E.md). Derleme:
 bash yap.sh -d beyond0lte --acpi --clean
 ```
 
-> Durum: bu port **kaynak düzeyinde** tamamdır ve gerçek S10e DTB'si (stok
-> firmware'den) depoya konmuştur; yine de S10e üzerinde **henüz flaşlanıp
-> denenmedi**. Kalan tek gerçek varsayım `"Display Reserved"` bölgesidir (§13).
+> Durum: bu port **derleniyor** (`Mu-beyond0lte.img` üretiliyor) ve gerçek S10e
+> DTB'si (stok firmware'den) depoda; yine de S10e üzerinde **henüz
+> flaşlanıp denenmedi**. Kalan tek gerçek varsayım `"Display Reserved"`
+> bölgesidir (§13). Kurulum: [`BUILD_LINUX.md`](BUILD_LINUX.md).
 
 Kısıtlar:
 
@@ -131,7 +132,8 @@ UEFI_beyond2lte/
 ├── esp/                     ESP icerigi (startup.nsh, boot.wim, EFI/...)
 │
 └── belgeler: STATUS.md (4100 satir gunluk), STOK_ACILIS.md,
-             HARDWARE.md, BUILD.md, PARTITIONS.md, ORTAM.md, ...
+             HARDWARE.md, BUILD.md / BUILD_LINUX.md, PARTITIONS.md,
+             ORTAM.md, ...
 ```
 
 ---
@@ -1916,7 +1918,7 @@ giriyor. Bu bir bugcheck'e mal oldu (`SYSTEM_THREAD_EXCEPTION_NOT_HANDLED`).
 - `B2LEl2Dxe` ve `B2LResetHookDxe` kullanım dışı, kaynakları duruyor
 - `boot.wim`'in orijinal `Start` değerleri hiç kaydedilmedi; geri dönüş için
   ISO'daki dokunulmamış kopyadan okunmalı
-- **S10e (`beyond0lte`) portu** kaynak düzeyinde hazır ama cihazda denenmedi:
+- **S10e (`beyond0lte`) portu** derleniyor, ama cihazda denenmedi:
   - `Resources/DTBs/beyond0lte.dtb` artık **gerçek S10e DTB'si**: stok
     `G970FXXUHHXJ1` firmware'inden `dt.img` (base) + `dtbo.img` (EUR OPEN 25
     board overlay) `fdtoverlay` ile birleştirildi. 3 bank / 6.00 GiB.
@@ -1929,12 +1931,16 @@ giriyor. Bu bir bugcheck'e mal oldu (`SYSTEM_THREAD_EXCEPTION_NOT_HANDLED`).
     ses kıs `gpa0-4`, özel tuş `gpa0-6` — `KeypadDeviceLib` ile birebir.
   - Panel `s6e3fa7_beyond0` = 1080×2280 (`mres_width=0x438`,
     `mres_height=0x8e8`), PCD çerçeve tamponuyla uyumlu.
+  - **Derleme doğrulandı** (Linux native, clang 23 / `CLANGPDB`,
+    `aarch64-unknown-windows-msvc`): `Mu-beyond0lte.img` 4,4 MB, FD tam 4 MiB
+    `0xC9000000`'da, 67 imaj PE doğrulamasından geçti, arkasına gerçek S10e
+    DTB'si (372541 B) eklendi. `beyond2lte` da aynı ağaçla derleniyor —
+    regresyon yok. Kurulum: `BUILD_LINUX.md`.
   - Hâlâ **varsayım**: `"Display Reserved"` bölgesi (`0xCA000000`, 20 MiB) —
     bu bölge DTB'den değil S-Boot'tan gelir, S10+'taki değer korunuyor.
   - Fiziksel board revizyonu bilinmiyor; DTB en yüksek revizyonu (`EUR OPEN
     25`) kullanıyor. Gerekirse `--index N`.
-  - Hiç derleme/cihaz testi yapılmadı. Ayrıntı ve flash/geri dönüş:
-    `PORT_S10E.md`.
+  - Cihaz testi yapılmadı. Ayrıntı ve flash/geri dönüş: `PORT_S10E.md`.
 
 ---
 
