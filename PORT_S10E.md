@@ -445,11 +445,14 @@ Interpretasi: `co` naik dan `hit` naik saat layar disentuh = jalur sentuh
 hidup; `poll` naik tetapi `empty` ikut naik dan `co=0` = kontroler masih
 belum mengirim event; `err` naik = masalah I2C.
 
-Bundle build `692a57d`: `uefi-boot.tar` SHA-256
-`ec1d5c0cd0b47042273f5e8a6d7934c0b592f320ceaa82176670784c519eae9e`,
+Bundle build `49af4f7`: `uefi-boot.tar` SHA-256
+`11d4024a62d720d4178c8f3f6744e5a572836fe9299bcdc876a7e5e0ada09933`,
 `Mu-beyond0lte.img` SHA-256
-`73c505dd19d6e6cc6ea7688d1a2f03ea2bd7494091c9fdc62b175a6eb995b8a8`.
-Teks layar self-test berbahasa **Inggris** (komentar kode tetap Turki).
+`4eec676363ba5d62615908fba6a22806fb35f3a2b2a151cbf670e47cd3f8851c`.
+Teks layar self-test berbahasa **Inggris** (komentar kode tetap Turki) dan
+dicetak **3x lebih besar**: glif diambil dari HII font lalu tiap piksel
+digambar sebagai blok 3x3 ke framebuffer (cara yang sama dipakai
+`B2LGoster`), supaya mudah difoto.
 **Status: menunggu pengujian ulang di perangkat** (hasil akan dicatat di
 sini).
 
