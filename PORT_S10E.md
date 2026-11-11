@@ -374,15 +374,15 @@ Di-flash **2026-11-11** dengan `uefi-boot.tar` SHA-256
 | `RAM >=0x980000000` | `yok (dogru)` | OK |
 | `Block IO` | `37 device`; `#1 122016 MB blk=4096 fixed` | OK — UFS 122 GB, blok 4 KiB |
 | `FAT/FS` | `0 volume` | sesuai — memang belum ada ESP |
-| `Touch` | `AbsolutePointer var` | OK — panel sentuh terdeteksi |
+| `Touch` | `AbsolutePointer present` (dari `ConSplitter`) | **belum** — perlu lihat `Touch.entry`; lihat di bawah |
 | `Key` (live) | Volume Down → `SCAN_DOWN (0x02)` | OK |
 
-Kesimpulan: memory map, UFS, GOP, dan keberadaan panel sentuh semuanya
-sesuai perkiraan; **tidak ada** bank DRAM hantu di atas `0x980000000` dan
-total DRAM tepat 6 GiB. Uji tombol live juga jalan: Volume Down →
-`SCAN_DOWN (0x02)`, Bixby singkat → `ENTER (0x0D)`, Bixby tahan →
-`SCAN_ESC (0x17)`, dan Bixby-tahan + Volume berhasil keluar (lanjut ke
-"No Operating System Found!" lalu mati).
+Kesimpulan: memory map, UFS, dan GOP semuanya sesuai perkiraan; **tidak
+ada** bank DRAM hantu di atas `0x980000000` dan total DRAM tepat 6 GiB.
+Uji tombol live juga jalan: Volume Down → `SCAN_DOWN (0x02)`, Bixby singkat
+→ `ENTER (0x0D)`, Bixby tahan → `SCAN_ESC (0x17)`, dan Bixby-tahan + Volume
+berhasil keluar (lanjut ke "No Operating System Found!" lalu mati). Sentuh
+masih dalam penyelidikan — lihat bagian di bawah.
 
 #### Uji sentuh: masalah dan perbaikannya
 
@@ -432,29 +432,69 @@ Perbaikan kedua (build `6b683c1`) menambahkan *bring-up* ala
 2. baca *power mode* `0xE4`; kalau masih LPM (`0x01`), tulis `0x00` (scan);
 3. `CLEAR_EVENT_STACK` (`0x62`), lalu `SENSE_ON` (`0x10`).
 
-Sebagai alat diagnosis, driver kini menerbitkan protokol lokal (GUID tetap,
+Sebagai alat diagnosis, driver menerbitkan protokol lokal (GUID tetap,
 tanpa mengubah INF modul BDS) dan layar self-test mencetak:
 
 | Baris | Isi |
 | --- | --- |
 | `Touch.fn` | `be=xxxx af=xxxx pm=xx ok=n` — nilai `0x30` sebelum/sesudah, `0xE4`, dan apakah bring-up sukses |
-| `Touch.ev` | `poll empty err st co ig` — jumlah baca, FIFO kosong, error I2C, event status, event koordinat, event yang diabaikan |
+| `Touch.ev` | `poll empty err` lalu `st co ig` — jumlah baca, FIFO kosong, error I2C, event status, event koordinat, event yang diabaikan |
 | `Touch.raw` | 8 byte terakhir yang dibaca dari FIFO |
 
 Interpretasi: `co` naik dan `hit` naik saat layar disentuh = jalur sentuh
 hidup; `poll` naik tetapi `empty` ikut naik dan `co=0` = kontroler masih
 belum mengirim event; `err` naik = masalah I2C.
 
-Bundle build `49af4f7`: `uefi-boot.tar` SHA-256
-`11d4024a62d720d4178c8f3f6744e5a572836fe9299bcdc876a7e5e0ada09933`,
+Setelah bring-up `6b683c1` di-flash, hasilnya masih negatif dan justru
+membongkar kesalahan diagnosis sebelumnya:
+
+- `Touch.m : 65536 x 65536` — nilai ini **bukan** dari driver kita (driver
+  menyetel `4095`). Itu mode default `ConSplitterDxe` (`0x10000`), jadi
+  `AbsolutePointer` yang dipegang UI adalah protokol **agregat**, bukan
+  milik `B2LTouchDxe`.
+- `Touch.fn: no diag protocol` — protokol teshis kita tidak terpasang,
+  artinya `B2LTouchEntry` gagal **sebelum** baris instalasi di akhir.
+
+Jadi klaim lama "driver berhasil mem-probe `sec_ts`" keliru: yang terdeteksi
+hanya `ConSplitter`. Urutan dispatch juga menjelaskan sebabnya —
+`B2LTouchDxe` ada di `APRIORI` sebelum `PmicDxe`, sehingga `entry`-nya
+berjalan sangat awal.
+
+Build `f49b7c7` memperbaiki instrumentasi supaya satu kali flash menunjukkan
+titik gagalnya:
+
+1. Protokol teshis sekarang dipasang **pertama kali** di `B2LTouchEntry`,
+   bukan di akhir.
+2. `B2L_TOUCH_DIAG` diperluas dengan `Stage` (1=i2c, 2=probe, 3=events,
+   4=reset, 5=install, 6=timer, 7=selesai), `EntryStatus`, `AbsPointer`,
+   `DeviceId[5]`, `Integrity`, dan `BootStatus`.
+3. UI mencari protokol teshis lebih dulu; kalau `AbsPointer` terisi, UI
+   memakai protokol itu **langsung** (melewati `ConSplitter`), lalu
+   memanggil `Reset(TRUE)` sekali di awal self-test untuk mencoba bring-up
+   lagi setelah `PmicDxe` dkk. termuat.
+4. Baris baru: `Touch.entry` (stage + status) dan `Touch.id`
+   (DeviceId + integrity + boot status).
+
+Interpretasi hasil berikutnya:
+
+| Baris | Arti |
+| --- | --- |
+| `Touch.entry: stage=1` | gagal di `B2LHsI2cInitialize` (LocateProtocol/MapMemoryRegion/InitBus) |
+| `Touch.entry: stage=2` | I2C jalan tetapi probe `sec_ts` gagal (lihat `st`) |
+| `Touch.entry: stage=4` | I2C+probe OK, bring-up `0x30/0xE4/0x62/0x10` gagal |
+| `Touch.entry: stage=7` | driver selesai; fokus ke `Touch.ev`/`Touch.dx` |
+| `Touch.id: 00 00 ...` | Device ID tidak terbaca / bus tidak menjawab |
+| `Touch.id: xx ... i=80 b=20` | chip menjawab; firmware OK dan mode APP |
+
+Bundle build `f49b7c7`: `uefi-boot.tar` SHA-256
+`92e383aabd26b5394e82707d62ac1e0e44cd24b8c995972b220042485140ca89`,
 `Mu-beyond0lte.img` SHA-256
-`4eec676363ba5d62615908fba6a22806fb35f3a2b2a151cbf670e47cd3f8851c`.
+`81035aecefc8b9cb2f7f40398c10bff8cd9c84b23ac7eb5696c29c65892312fe`.
 Teks layar self-test berbahasa **Inggris** (komentar kode tetap Turki) dan
 dicetak **3x lebih besar**: glif diambil dari HII font lalu tiap piksel
 digambar sebagai blok 3x3 ke framebuffer (cara yang sama dipakai
 `B2LGoster`), supaya mudah difoto.
-**Status: menunggu pengujian ulang di perangkat** (hasil akan dicatat di
-sini).
+**Status: menunggu hasil flash `f49b7c7`** (hasil akan dicatat di sini).
 
 ---
 
