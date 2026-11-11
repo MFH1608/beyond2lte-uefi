@@ -379,9 +379,48 @@ Di-flash **2026-11-11** dengan `uefi-boot.tar` SHA-256
 
 Kesimpulan: memory map, UFS, GOP, dan keberadaan panel sentuh semuanya
 sesuai perkiraan; **tidak ada** bank DRAM hantu di atas `0x980000000` dan
-total DRAM tepat 6 GiB. Sisa uji manual yang belum dicatat: sentuh layar
-(baris `Touch`), Bixby singkat (`ENTER`), Bixby tahan (`SCAN_ESC`), dan
-keluar dengan Bixby-tahan + Volume.
+total DRAM tepat 6 GiB. Uji tombol live juga jalan: Volume Down →
+`SCAN_DOWN (0x02)`, Bixby singkat → `ENTER (0x0D)`, Bixby tahan →
+`SCAN_ESC (0x17)`, dan Bixby-tahan + Volume berhasil keluar (lanjut ke
+"No Operating System Found!" lalu mati).
+
+#### Uji sentuh: masalah dan perbaikannya
+
+Uji sentuh pertama **tidak bereaksi** (baris `Touch` tetap `(henuz yok)`).
+Akar masalahnya bukan panel: `AbsolutePointer var` sudah muncul, artinya
+driver berhasil mem-probe `sec_ts` (`DeviceId` + firmware integrity + boot
+status `APP_MODE 0x20`). Penyebab sebenarnya ada di alur event:
+
+- Loop self-test menunggu dengan `gBS->Stall`, yang di DXE core hanya
+  metronome busy-wait — **tidak** memompa event loop. Akibatnya timer
+  `EVT_TIMER | EVT_NOTIFY_SIGNAL` (TPL_CALLBACK) milik driver sentuh tidak
+  pernah di-dispatch, sehingga `PollEvents` tak pernah jalan dan kuyur
+  state selalu kosong.
+- Sebaliknya keypad tetap jalan karena `KeypadTextIn` mem-poll tombol
+  langsung di dalam `ReadKeyStroke`, bukan lewat timer.
+
+Perbaikannya dua sisi, keduanya hanya di `beyond0ltePkg`:
+
+1. **Pompa event loop di UI** (`B2LPlatformBootManager.c`): setiap iterasi
+   memanggil `gBS->RestoreTPL (gBS->RaiseTPL (TPL_HIGH_LEVEL))`.
+   `CoreRestoreTpl` men-dispatch semua notify dengan TPL di atas TPL
+   aplikasi, jadi timer `TPL_CALLBACK` ikut terpicu.
+2. **Polling on-demand di driver** (`B2LTouchDxe.c`): kalau `GetState`
+   melihat kuyu kosong dan sudah lewat ≥ 20 ms sejak poll terakhir, driver
+   sendiri membaca denetil secara langsung. Jadi UI tetap dapat data tanpa
+   bergantung pada timer. `TouchNowNs` memakai `TimerLib`.
+
+Sekaligus baris diagnostik baru `Touch.dx` ditambahkan supaya satu kali
+flash bisa memastikan di mana masalahnya: `st` = hasil `GetState`
+(`Not Ready` = FIFO kosong/memang belum disentuh, `Device Error` = I2C
+gagal), `poll` = berapa kali `GetState` dipanggil, `hit` = berapa kali ada
+state. Kalau `poll` naik dan `hit` naik saat layar disentuh, jalur sentuh
+sudah hidup.
+
+Muncul di build `59e8177`; bundle `uefi-boot.tar` SHA-256
+`3280baacfe50988e5f08b49517c11515f4d4364d3e5e52e168a160c1f2581e17`.
+**Status: menunggu pengujian ulang di perangkat** (hasil akan dicatat di
+sini).
 
 ---
 
