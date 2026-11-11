@@ -288,6 +288,10 @@ ProbeController (
   EFI_STATUS  Status;
 
   Status = ReadCommand (SEC_TS_READ_DEVICE_ID, DeviceId, sizeof (DeviceId));
+  if (!EFI_ERROR (Status)) {
+    CopyMem (mTouchDiag.Diag.DeviceId, DeviceId, sizeof (DeviceId));
+  }
+
   if (EFI_ERROR (Status)) {
     return Status;
   }
@@ -320,6 +324,9 @@ ProbeController (
   if (EFI_ERROR (Status)) {
     return Status;
   }
+
+  mTouchDiag.Diag.Integrity  = FirmwareIntegrity;
+  mTouchDiag.Diag.BootStatus = BootStatus;
 
   DEBUG ((
     DEBUG_INFO,
@@ -518,18 +525,39 @@ B2LTouchEntry (
 {
   EFI_STATUS  Status;
 
+  //
+  // Teshis protokolu ILK is olarak yayinlanir. Surucu sonraki adimlardan
+  // birinde (HSI2C init, probe, reset, ...) basarisiz olursa entry erken
+  // doner; eskiden bu durumda protokol hic kurulmuyor ve self-test ekrani
+  // yalnizca "no diag protocol" gosteriyordu. Artik Stage/EntryStatus
+  // uzerinden nerede duruldugu gorulebilir.
+  //
+  ZeroMem (&mTouchDiag, sizeof (mTouchDiag));
+  mTouchDiag.Diag.Stage = B2L_TOUCH_STAGE_ENTRY;
+  gBS->InstallProtocolInterface (
+         &ImageHandle,
+         (EFI_GUID *)(VOID *)&mB2LTouchDiagProtocolGuid,
+         EFI_NATIVE_INTERFACE,
+         &mTouchDiag
+         );
+
+  mTouchDiag.Diag.Stage = B2L_TOUCH_STAGE_I2C;
   Status = B2LHsI2cInitialize ();
+  mTouchDiag.Diag.EntryStatus = (UINT64)(UINTN)Status;
   if (EFI_ERROR (Status)) {
     DEBUG ((DEBUG_ERROR, "B2LTouch: HSI2C10 init failed: %r\n", Status));
     return Status;
   }
 
+  mTouchDiag.Diag.Stage = B2L_TOUCH_STAGE_PROBE;
   Status = ProbeController ();
+  mTouchDiag.Diag.EntryStatus = (UINT64)(UINTN)Status;
   if (EFI_ERROR (Status)) {
     DEBUG ((DEBUG_ERROR, "B2LTouch: sec_ts probe failed: %r\n", Status));
     return Status;
   }
 
+  mTouchDiag.Diag.Stage = B2L_TOUCH_STAGE_EVENTS;
   ZeroMem (&mTouch, sizeof (mTouch));
   mTouch.Mode.AbsoluteMinX = 0;
   mTouch.Mode.AbsoluteMinY = 0;
@@ -550,10 +578,39 @@ B2LTouchEntry (
                   &mTouch,
                   &mTouch.Protocol.WaitForInput
                   );
+  mTouchDiag.Diag.EntryStatus = (UINT64)(UINTN)Status;
   if (EFI_ERROR (Status)) {
     return Status;
   }
 
+  mTouchDiag.Diag.Stage = B2L_TOUCH_STAGE_RESET;
+  Status = TouchReset (&mTouch.Protocol, FALSE);
+  mTouchDiag.Diag.EntryStatus = (UINT64)(UINTN)Status;
+  if (EFI_ERROR (Status)) {
+    gBS->CloseEvent (mTouch.Protocol.WaitForInput);
+    return Status;
+  }
+
+  mTouchDiag.Diag.Stage = B2L_TOUCH_STAGE_INSTALL;
+  Status = gBS->InstallProtocolInterface (
+                  &ImageHandle,
+                  &gEfiAbsolutePointerProtocolGuid,
+                  EFI_NATIVE_INTERFACE,
+                  &mTouch.Protocol
+                  );
+  mTouchDiag.Diag.EntryStatus = (UINT64)(UINTN)Status;
+  if (EFI_ERROR (Status)) {
+    gBS->CloseEvent (mTouch.Protocol.WaitForInput);
+    return Status;
+  }
+
+  //
+  // Self-test ekrani ConSplitter'in toplu AbsolutePointer'i yerine dogrudan
+  // bizim protokolu kullanabilsin diye isaretcisini yayinla.
+  //
+  mTouchDiag.Diag.AbsPointer = (UINT64)(UINTN)&mTouch.Protocol;
+
+  mTouchDiag.Diag.Stage = B2L_TOUCH_STAGE_TIMER;
   Status = gBS->CreateEvent (
                   EVT_TIMER | EVT_NOTIFY_SIGNAL,
                   TPL_CALLBACK,
@@ -561,58 +618,28 @@ B2LTouchEntry (
                   &mTouch,
                   &mTouch.PollTimer
                   );
-  if (EFI_ERROR (Status)) {
-    gBS->CloseEvent (mTouch.Protocol.WaitForInput);
-    return Status;
+  if (!EFI_ERROR (Status)) {
+    Status = gBS->SetTimer (
+                    mTouch.PollTimer,
+                    TimerPeriodic,
+                    B2L_TOUCH_POLL_INTERVAL
+                    );
   }
 
-  Status = TouchReset (&mTouch.Protocol, FALSE);
-  if (EFI_ERROR (Status)) {
-    gBS->CloseEvent (mTouch.PollTimer);
-    gBS->CloseEvent (mTouch.Protocol.WaitForInput);
-    return Status;
-  }
-
-  Status = gBS->InstallProtocolInterface (
-                  &ImageHandle,
-                  &gEfiAbsolutePointerProtocolGuid,
-                  EFI_NATIVE_INTERFACE,
-                  &mTouch.Protocol
-                  );
-  if (EFI_ERROR (Status)) {
-    gBS->CloseEvent (mTouch.PollTimer);
-    gBS->CloseEvent (mTouch.Protocol.WaitForInput);
-    return Status;
-  }
-
-  Status = gBS->SetTimer (
-                  mTouch.PollTimer,
-                  TimerPeriodic,
-                  B2L_TOUCH_POLL_INTERVAL
-                  );
+  mTouchDiag.Diag.EntryStatus = (UINT64)(UINTN)Status;
   if (EFI_ERROR (Status)) {
     gBS->UninstallProtocolInterface (
            ImageHandle,
            &gEfiAbsolutePointerProtocolGuid,
            &mTouch.Protocol
            );
-    gBS->CloseEvent (mTouch.PollTimer);
+    mTouchDiag.Diag.AbsPointer = 0;
     gBS->CloseEvent (mTouch.Protocol.WaitForInput);
     return Status;
   }
 
+  mTouchDiag.Diag.Stage = B2L_TOUCH_STAGE_DONE;
   DEBUG ((DEBUG_INFO, "B2LTouch: EFI Absolute Pointer installed\n"));
-
-  //
-  // Teshis protokolu kritik degil: basarisiz olsa da driver calismaya devam
-  // eder, sadece self-test ekrani ek satirlari gosteremez.
-  //
-  gBS->InstallProtocolInterface (
-         &ImageHandle,
-         (EFI_GUID *)(VOID *)&mB2LTouchDiagProtocolGuid,
-         EFI_NATIVE_INTERFACE,
-         &mTouchDiag
-         );
 
   return EFI_SUCCESS;
 }

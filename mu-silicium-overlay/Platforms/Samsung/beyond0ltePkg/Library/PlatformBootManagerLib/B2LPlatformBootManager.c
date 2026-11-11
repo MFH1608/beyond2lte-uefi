@@ -52,6 +52,12 @@
 #define B2L_TOUCH_DIAG_EVENT_SIZE  8
 
 typedef struct {
+  UINT32  Stage;
+  UINT32  EntryStatus;
+  UINT64  AbsPointer;
+  UINT8   DeviceId[5];
+  UINT8   Integrity;
+  UINT8   BootStatus;
   UINT32  Polls;
   UINT32  Empty;
   UINT32  Errors;
@@ -472,8 +478,61 @@ B2LSelfTest (
   B2LDrawMemory ();
   B2LDrawDevices ();
 
-  Status   = gBS->LocateProtocol (&gEfiAbsolutePointerProtocolGuid, NULL, (VOID **)&Abs);
-  HasTouch = !EFI_ERROR (Status);
+  //
+  // Surucu teshis protokolu. Once bunu arariz: hem entry asamasini gosterir
+  // hem de kurdugu AbsolutePointer protokolunun isaretcisini tasir. UI
+  // ConSplitter'in toplu (agregat) protokolu yerine DOGRUDAN bizim
+  // protokolla konusmak zorunda: ConSplitter mode'u 0x10000 (65536) ve
+  // bizim surucumuz oraya bagli degil.
+  //
+  Status = gBS->LocateProtocol (
+                  (EFI_GUID *)(VOID *)&mB2LTouchDiagGuid,
+                  NULL,
+                  (VOID **)&TouchDiag
+                  );
+  if (EFI_ERROR (Status) || (TouchDiag == NULL)) {
+    TouchDiag = NULL;
+    B2LUiPrint (B2L_UI_KIRMIZI, L"Touch.fn: no diag protocol");
+  } else {
+    B2LUiPrint (
+      (TouchDiag->Diag.Stage == 7) ? B2L_UI_YESIL : B2L_UI_KIRMIZI,
+      L"Touch.entry: stage=%u st=%r",
+      TouchDiag->Diag.Stage,
+      (EFI_STATUS)(UINTN)TouchDiag->Diag.EntryStatus
+      );
+    B2LUiPrint (
+      B2L_UI_BEYAZ,
+      L"Touch.id: %02x %02x %02x %02x %02x i=%02x b=%02x",
+      TouchDiag->Diag.DeviceId[0],
+      TouchDiag->Diag.DeviceId[1],
+      TouchDiag->Diag.DeviceId[2],
+      TouchDiag->Diag.DeviceId[3],
+      TouchDiag->Diag.DeviceId[4],
+      TouchDiag->Diag.Integrity,
+      TouchDiag->Diag.BootStatus
+      );
+    B2LUiPrint (
+      TouchDiag->Diag.BringUpOk ? B2L_UI_YESIL : B2L_UI_KIRMIZI,
+      L"Touch.fn: be=%02x%02x af=%02x%02x pm=%02x ok=%u",
+      TouchDiag->Diag.FnBefore[0],
+      TouchDiag->Diag.FnBefore[1],
+      TouchDiag->Diag.FnAfter[0],
+      TouchDiag->Diag.FnAfter[1],
+      TouchDiag->Diag.PowerMode,
+      TouchDiag->Diag.BringUpOk
+      );
+
+    if (TouchDiag->Diag.AbsPointer != 0) {
+      Abs      = (EFI_ABSOLUTE_POINTER_PROTOCOL *)(UINTN)TouchDiag->Diag.AbsPointer;
+      HasTouch = TRUE;
+    }
+  }
+
+  if (!HasTouch) {
+    Status   = gBS->LocateProtocol (&gEfiAbsolutePointerProtocolGuid, NULL, (VOID **)&Abs);
+    HasTouch = !EFI_ERROR (Status);
+  }
+
   B2LUiPrint (
     HasTouch ? B2L_UI_YESIL : B2L_UI_KIRMIZI,
     L"Touch   : %a",
@@ -489,29 +548,15 @@ B2LSelfTest (
   }
 
   //
-  // Surucu teshis protokolu: bring-up'ta yazilan/okunan register degerleri.
-  // be/af = 0x30 touch-function oncesi/sonrasi, pm = 0xE4 power mode,
-  // ok = bring-up yazilari basarili mi.
+  // Surucu entry'de bring-up yapmisti; ama o an (APRIORI) PmicDxe gibi
+  // suruculer henuz yuklenmemis olabilir. Self-test baslarken bizim
+  // protokolumuz uzerinden bir kez daha reset/bring-up denemek denetleyiciyi
+  // tarama moduna alabilir. Basarisiz olsa da ekran calismaya devam eder.
   //
-  Status = gBS->LocateProtocol (
-                  (EFI_GUID *)(VOID *)&mB2LTouchDiagGuid,
-                  NULL,
-                  (VOID **)&TouchDiag
-                  );
-  if (EFI_ERROR (Status) || (TouchDiag == NULL)) {
-    TouchDiag = NULL;
-    B2LUiPrint (B2L_UI_KIRMIZI, L"Touch.fn: no diag protocol");
-  } else {
-    B2LUiPrint (
-      TouchDiag->Diag.BringUpOk ? B2L_UI_YESIL : B2L_UI_KIRMIZI,
-      L"Touch.fn: be=%02x%02x af=%02x%02x pm=%02x ok=%u",
-      TouchDiag->Diag.FnBefore[0],
-      TouchDiag->Diag.FnBefore[1],
-      TouchDiag->Diag.FnAfter[0],
-      TouchDiag->Diag.FnAfter[1],
-      TouchDiag->Diag.PowerMode,
-      TouchDiag->Diag.BringUpOk
-      );
+  if (HasTouch && (TouchDiag != NULL) &&
+      (TouchDiag->Diag.AbsPointer != 0) && (Abs->Reset != NULL))
+  {
+    Abs->Reset (Abs, TRUE);
   }
 
   B2LUiPrint (B2L_UI_BEYAZ, L"--------------------------------------------------------------");

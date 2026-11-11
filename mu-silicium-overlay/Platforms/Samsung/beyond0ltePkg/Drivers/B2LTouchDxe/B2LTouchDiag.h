@@ -20,7 +20,36 @@
 
 #define B2L_TOUCH_DIAG_EVENT_SIZE  8
 
+//
+// B2LTouchEntry hangi asamada durdu? Self-test ekrani bunu "Touch.entry"
+// satirinda gosterir. Surucu protokolu ILK is olarak yayinladigi icin,
+// sonraki bir adim basarisiz olsa bile bu bilgi ekrana ulasir.
+//
+#define B2L_TOUCH_STAGE_ENTRY     0
+#define B2L_TOUCH_STAGE_I2C       1
+#define B2L_TOUCH_STAGE_PROBE     2
+#define B2L_TOUCH_STAGE_EVENTS    3
+#define B2L_TOUCH_STAGE_RESET     4
+#define B2L_TOUCH_STAGE_INSTALL   5
+#define B2L_TOUCH_STAGE_TIMER     6
+#define B2L_TOUCH_STAGE_DONE      7
+
 typedef struct {
+  //
+  // B2LTouchEntry asama takibi. Stage = o an denenen adim, EntryStatus = o
+  // adimin EFI_STATUS degeri (EFI_STATUS 64-bit oldugu icin UINT64).
+  //
+  UINT32  Stage;
+  UINT32  EntryStatus;
+  UINT64  AbsPointer;     // basariliysa kurulan AbsolutePointer protokolu
+
+  //
+  // Probe (0x22/0x21/0x55) sirasinda okunan kimlik degerleri.
+  //
+  UINT8   DeviceId[5];
+  UINT8   Integrity;
+  UINT8   BootStatus;
+
   //
   // PollEvents cagri sayaci ve sonuclari.
   //
