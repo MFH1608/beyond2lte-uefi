@@ -391,13 +391,11 @@ B2LGosterEntry (
     UINT32                 Surum2;
     UINT64                 Sayfa;
     UINT64                 Tepe;
-    UINT32                 Parca;
 
     Harita = NULL;
     Boyut  = 0;
     Sayfa  = 0;
     Tepe   = 0;
-    Parca  = 0;
 
     gBS->GetMemoryMap (&Boyut, Harita, &Anahtar, &TanimBoy, &Surum2);
     Boyut += 8 * TanimBoy;
@@ -412,7 +410,6 @@ B2LGosterEntry (
           UINT64 Son;
 
           Sayfa += D->NumberOfPages;
-          Parca++;
 
           Son = D->PhysicalStart + D->NumberOfPages * 4096;
           if (Son > Tepe) {

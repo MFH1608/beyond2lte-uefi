@@ -18,7 +18,6 @@
 #include "UfsCal.h"
 
 static struct UfsCalParam *ufs_cal[NUM_OF_UFS_HOST];
-static unsigned long ufs_cal_lock_timeout = 0xFFFFFFFF;
 
 static const struct UfsCalPhyCfg init_cfg_evt0[] = {
  {0x44, 0x00, PMD_ALL, UNIPRO_DBG_PRD, BRD_ALL},
@@ -1040,7 +1039,6 @@ UINT8 UfsCalGetTargetBoard (VOID)
 UfsCalError UfsCalInit (struct UfsCalParam *p)
 {
   ufs_cal[0]            = p;
-  ufs_cal_lock_timeout  = 0xFFFFFFFF;
 
   return UFS_CAL_NO_ERROR;
 }

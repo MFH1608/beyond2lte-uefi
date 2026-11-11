@@ -29,6 +29,12 @@
 
 [PcdsFixedAtBuild]
   #
+  # ACPI
+  #
+  gEfiMdeModulePkgTokenSpaceGuid.PcdAcpiDefaultOemTableId|0x2030323839453553
+  gEfiMdeModulePkgTokenSpaceGuid.PcdAcpiDefaultOemRevision|0x9820
+
+  #
   # CPU
   #
   gArmPlatformTokenSpaceGuid.PcdCoreCount|8
@@ -39,6 +45,18 @@
   #
   gArmTokenSpaceGuid.PcdGicDistributorBase|0x10101000
   gArmTokenSpaceGuid.PcdGicInterruptInterfaceBase|0x10102000
+
+  #
+  # GPIO
+  # List Contents: 0x10430000, 0x10830000, 0x13030000, 0x13C40000, 0x15580000, 0x15850000, 0x15C30000, 0x18C60000
+  #
+  gSamsungPkgTokenSpaceGuid.PcdGpioCtrlAddr|{ 0x00, 0x00, 0x43, 0x10, 0x00, 0x00, 0x83, 0x10, 0x00, 0x00, 0x03, 0x13, 0x00, 0x00, 0xC4, 0x13, 0x00, 0x00, 0x58, 0x15, 0x00, 0x00, 0x85, 0x15, 0x00, 0x00, 0xC3, 0x15, 0x00, 0x00, 0xC6, 0x18 }
+
+  #
+  # SPEEDY
+  # List Contents: 0x15970000, 0x15980000
+  #
+  gSamsungPkgTokenSpaceGuid.PcdSpeedyBusAddr|{ 0x00, 0x00, 0x97, 0x15, 0x00, 0x00, 0x98, 0x15 }
 
   #
   # RAM Manager
@@ -66,9 +84,8 @@
   #
   # IO Libraries
   #
-  GpioLib|S5E9820Pkg/Library/GpioLib/GpioLib.inf
+  GpioBankLib|S5E9820Pkg/Library/GpioBankLib/GpioBankLib.inf
   HsI2cLib|S5E9820Pkg/Library/HsI2cLib/HsI2cLib.inf
-  SpeedyLib|S5E9820Pkg/Library/SpeedyLib/SpeedyLib.inf
 
   #
   # Power Management Libraries
