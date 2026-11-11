@@ -27,6 +27,8 @@
 #include <Protocol/BlockIo.h>
 #include <Protocol/AbsolutePointer.h>
 #include <Protocol/GraphicsOutput.h>
+#include <Protocol/HiiImage.h>
+#include <Protocol/HiiFont.h>
 #include <Protocol/SimpleFileSystem.h>
 #include <Protocol/SimpleTextIn.h>
 
@@ -70,6 +72,162 @@ typedef struct {
 
 STATIC CONST EFI_GUID  mB2LTouchDiagGuid = B2L_TOUCH_DIAG_PROTOCOL_GUID;
 
+//
+// Konsolun yazi tipi 8x19 pikselde sabittir (EFI_GLYPH_WIDTH/HEIGHT
+// degistirilemez), bu yuzden 1080x2280 ekranda fotograftan okumak zor.
+// B2LGoster'daki gibi glifleri HII font protokolunden alip OLCEK kat
+// buyuterek dogrudan framebuffer'a ciziyoruz. Boylece self-test ekrani
+// buyuk ve net okunur.
+//
+#define B2L_UI_OLCEK    3                 // glif basina 3x3 piksel blogu
+#define B2L_UI_GLIF_W   8                 // HII varsayilan glif genisligi
+#define B2L_UI_GLIF_H   19                // HII varsayilan glif yuksekligi
+#define B2L_UI_SATIR    (B2L_UI_GLIF_H * B2L_UI_OLCEK + 4)
+#define B2L_UI_KENAR    8                 // sol kenar boslugu
+
+#define B2L_UI_BEYAZ    0x00FFFFFF
+#define B2L_UI_GRI      0x00A0A0A0
+#define B2L_UI_YESIL    0x0040FF40
+#define B2L_UI_KIRMIZI  0x00FF4040
+#define B2L_UI_SARI     0x00FFFF40
+#define B2L_UI_MAVI     0x0060C0FF
+
+STATIC EFI_GRAPHICS_OUTPUT_PROTOCOL  *mUiGop;
+STATIC EFI_HII_FONT_PROTOCOL         *mUiFont;
+STATIC UINT32                        *mUiFb;      // framebuffer (32-bit piksel)
+STATIC UINT32                         mUiStride;  // piksel/satir
+STATIC UINT32                         mUiY;       // o anki cizim satiri
+STATIC BOOLEAN                        mUiReady;
+
+/**
+  Tek glifi OLCEK kat buyutup framebuffer'a bas.
+**/
+STATIC
+VOID
+B2LUiGlyph (
+  IN CHAR16  Ch,
+  IN UINT32  X,
+  IN UINT32  Y,
+  IN UINT32  Color
+  )
+{
+  EFI_IMAGE_OUTPUT  *Blt;
+  UINT32             HRes;
+  UINT32             VRes;
+  UINT32             Px;
+  UINT32             Py;
+  UINT32             I;
+  UINT32             J;
+
+  Blt = NULL;
+  if (EFI_ERROR (mUiFont->GetGlyph (mUiFont, Ch, NULL, &Blt, NULL)) || (Blt == NULL)) {
+    return;
+  }
+
+  HRes = mUiGop->Mode->Info->HorizontalResolution;
+  VRes = mUiGop->Mode->Info->VerticalResolution;
+
+  for (Py = 0; Py < Blt->Height; Py++) {
+    for (Px = 0; Px < Blt->Width; Px++) {
+      EFI_GRAPHICS_OUTPUT_BLT_PIXEL  *P;
+
+      P = &Blt->Image.Bitmap[Py * Blt->Width + Px];
+
+      //
+      // HII glifi on plani acik renk veriyor; sifirdan farkli her piksel
+      // "harfin parcasi" sayilir.
+      //
+      if ((P->Red | P->Green | P->Blue) == 0) {
+        continue;
+      }
+
+      for (J = 0; J < B2L_UI_OLCEK; J++) {
+        for (I = 0; I < B2L_UI_OLCEK; I++) {
+          UINT32  Fx;
+          UINT32  Fy;
+
+          Fx = X + Px * B2L_UI_OLCEK + I;
+          Fy = Y + Py * B2L_UI_OLCEK + J;
+          if ((Fx < HRes) && (Fy < VRes)) {
+            mUiFb[Fy * mUiStride + Fx] = Color;
+          }
+        }
+      }
+    }
+  }
+
+  if (Blt->Image.Bitmap != NULL) {
+    gBS->FreePool (Blt->Image.Bitmap);
+  }
+  gBS->FreePool (Blt);
+}
+
+/**
+  Tek satir yaz ve asagi in.
+**/
+STATIC
+VOID
+B2LUiLine (
+  IN CONST CHAR16  *Text,
+  IN UINT32         Color
+  )
+{
+  UINT32  X;
+
+  X = B2L_UI_KENAR;
+  while (*Text != L'\0') {
+    B2LUiGlyph (*Text, X, mUiY, Color);
+    X += B2L_UI_GLIF_W * B2L_UI_OLCEK;
+    Text++;
+  }
+
+  mUiY += B2L_UI_SATIR;
+}
+
+/**
+  Printf benzeri satir: metni bicimlendirip buyuk yaziyla cizer.
+**/
+STATIC
+VOID
+B2LUiPrint (
+  IN UINT32         Color,
+  IN CONST CHAR16  *Format,
+  ...
+  )
+{
+  VA_LIST  Marker;
+  CHAR16   Buffer[160];
+
+  VA_START (Marker, Format);
+  UnicodeVSPrint (Buffer, sizeof (Buffer), Format, Marker);
+  VA_END (Marker);
+
+  B2LUiLine (Buffer, Color);
+}
+
+/**
+  Y0 satirindan ekranin altina kadar siyahla temizle.
+**/
+STATIC
+VOID
+B2LUiClearFrom (
+  IN UINT32  Y0
+  )
+{
+  UINT32  VRes;
+
+  VRes = mUiGop->Mode->Info->VerticalResolution;
+  if (Y0 >= VRes) {
+    return;
+  }
+
+  SetMem32 (
+    &mUiFb[Y0 * mUiStride],
+    (UINTN)(VRes - Y0) * mUiStride * sizeof (UINT32),
+    0x00000000
+    );
+}
+
 STATIC
 BOOLEAN
 B2LIsMmio (
@@ -103,20 +261,20 @@ B2LDrawMemory (
   MapSize = 0;
   Status  = gBS->GetMemoryMap (&MapSize, NULL, &MapKey, &DescSize, &DescVer);
   if (EFI_ERROR (Status) && (Status != EFI_BUFFER_TOO_SMALL)) {
-    Print (L"RAM     : GetMemoryMap probe error (%r)\r\n", Status);
+    B2LUiPrint (B2L_UI_KIRMIZI, L"RAM     : GetMemoryMap probe error (%r)", Status);
     return;
   }
 
   MapSize += 8 * DescSize;
   Map      = AllocatePool (MapSize);
   if (Map == NULL) {
-    Print (L"RAM     : allocation failed\r\n");
+    B2LUiPrint (B2L_UI_KIRMIZI, L"RAM     : allocation failed");
     return;
   }
 
   Status = gBS->GetMemoryMap (&MapSize, Map, &MapKey, &DescSize, &DescVer);
   if (EFI_ERROR (Status)) {
-    Print (L"RAM     : GetMemoryMap error (%r)\r\n", Status);
+    B2LUiPrint (B2L_UI_KIRMIZI, L"RAM     : GetMemoryMap error (%r)", Status);
     FreePool (Map);
     return;
   }
@@ -156,12 +314,15 @@ B2LDrawMemory (
     }
   }
 
-  Print (L"RAM     : %u MB DRAM, %u MB free\r\n",
+  B2LUiPrint (B2L_UI_BEYAZ, L"RAM     : %u MB DRAM, %u MB free",
          (UINT32)DivU64x32 (DramTotal, 1024 * 1024),
          (UINT32)DivU64x32 (FreeRam, 1024 * 1024));
-  Print (L"Memmap  : %u desc, max end 0x%lx\r\n", (UINT32)Count, Highest);
-  Print (L"RAM >=0x980000000  : %a\r\n",
-         AboveLimit ? "PRESENT (WRONG)" : "none (ok)");
+  B2LUiPrint (B2L_UI_BEYAZ, L"Memmap  : %u desc, max end 0x%lx", (UINT32)Count, Highest);
+  B2LUiPrint (
+    AboveLimit ? B2L_UI_KIRMIZI : B2L_UI_YESIL,
+    L"RAM >=0x980000000  : %a",
+    AboveLimit ? "PRESENT (WRONG)" : "none (ok)"
+    );
 
   FreePool (Map);
 }
@@ -189,9 +350,9 @@ B2LDrawDevices (
                    &Handles
                    );
   if (EFI_ERROR (Status)) {
-    Print (L"Block IO: none (%r)\r\n", Status);
+    B2LUiPrint (B2L_UI_KIRMIZI, L"Block IO: none (%r)", Status);
   } else {
-    Print (L"Block IO: %u device\r\n", (UINT32)HandleCount);
+    B2LUiPrint (B2L_UI_BEYAZ, L"Block IO: %u device", (UINT32)HandleCount);
     Shown = 0;
     for (Index = 0; (Index < HandleCount) && (Shown < 6); Index++) {
       Status = gBS->HandleProtocol (Handles[Index], &gEfiBlockIoProtocolGuid, (VOID **)&Bio);
@@ -200,7 +361,7 @@ B2LDrawDevices (
       }
 
       Bytes = MultU64x64 (Bio->Media->LastBlock + 1, Bio->Media->BlockSize);
-      Print (L"  #%u %u MB blk=%u %a%a\r\n",
+      B2LUiPrint (B2L_UI_GRI, L"  #%u %u MB blk=%u %a%a",
              (UINT32)(Shown + 1),
              (UINT32)DivU64x32 (Bytes, 1024 * 1024),
              (UINT32)Bio->Media->BlockSize,
@@ -220,9 +381,9 @@ B2LDrawDevices (
                    &Handles
                    );
   if (EFI_ERROR (Status)) {
-    Print (L"FAT/FS  : 0 volume\r\n");
+    B2LUiPrint (B2L_UI_GRI, L"FAT/FS  : 0 volume");
   } else {
-    Print (L"FAT/FS  : %u volume\r\n", (UINT32)HandleCount);
+    B2LUiPrint (B2L_UI_BEYAZ, L"FAT/FS  : %u volume", (UINT32)HandleCount);
     FreePool (Handles);
   }
 }
@@ -238,12 +399,12 @@ B2LDrawDisplay (
 
   Status = gBS->LocateProtocol (&gEfiGraphicsOutputProtocolGuid, NULL, (VOID **)&Gop);
   if (!EFI_ERROR (Status) && (Gop->Mode != NULL) && (Gop->Mode->Info != NULL)) {
-    Print (L"Display : %ux%u (GOP mode %u)\r\n",
+    B2LUiPrint (B2L_UI_BEYAZ, L"Display : %ux%u (GOP mode %u)",
            Gop->Mode->Info->HorizontalResolution,
            Gop->Mode->Info->VerticalResolution,
            Gop->Mode->Mode);
   } else {
-    Print (L"Display : no GOP (%r)\r\n", Status);
+    B2LUiPrint (B2L_UI_KIRMIZI, L"Display : no GOP (%r)", Status);
   }
 }
 
@@ -263,7 +424,7 @@ B2LSelfTest (
   EFI_STATUS                     TouchStatus;
   UINT32                         TouchPolls;
   UINT32                         TouchHits;
-  UINTN                          DynRow;
+  UINT32                         DynTop;
   CHAR16                         LastKey[56];
   CHAR16                         LastTouch[80];
 
@@ -273,20 +434,39 @@ B2LSelfTest (
   TouchPolls  = 0;
   TouchHits   = 0;
   TouchDiag   = NULL;
-  DynRow      = 0;
+  DynTop      = 0;
 
-  if (gST->ConOut != NULL) {
-    gST->ConOut->ClearScreen (gST->ConOut);
-    gST->ConOut->SetAttribute (gST->ConOut, EFI_WHITE | EFI_BACKGROUND_BLACK);
+  //
+  // Buyuk yazi icin GOP + HII font gerekli. Ikisi de FV'de
+  // (GraphicsConsoleDxe ve HiiDatabaseDxe); bulunamazsa konsol yazisina
+  // dusmek yerine acikca bildir.
+  //
+  mUiReady = FALSE;
+  Status   = gBS->LocateProtocol (&gEfiGraphicsOutputProtocolGuid, NULL, (VOID **)&mUiGop);
+  if (!EFI_ERROR (Status) && (mUiGop->Mode != NULL) && (mUiGop->Mode->Info != NULL)) {
+    Status = gBS->LocateProtocol (&gEfiHiiFontProtocolGuid, NULL, (VOID **)&mUiFont);
+    if (!EFI_ERROR (Status) && (mUiFont != NULL)) {
+      mUiFb     = (UINT32 *)(UINTN)mUiGop->Mode->FrameBufferBase;
+      mUiStride = mUiGop->Mode->Info->PixelsPerScanLine;
+      mUiReady  = TRUE;
+    }
   }
+
+  if (!mUiReady) {
+    Print (L"B2L self-test: GOP/HII font unavailable (big text disabled).\r\n");
+    return;
+  }
+
+  B2LUiClearFrom (0);
+  mUiY = B2L_UI_KENAR;
 
   UnicodeSPrint (LastKey, sizeof (LastKey), L"(not yet)");
   UnicodeSPrint (LastTouch, sizeof (LastTouch), L"(not yet)");
 
-  Print (L"==============================================================\r\n");
-  Print (L"  S10e (beyond0lte) - UEFI SELF TEST\r\n");
-  Print (L"  No OS/ESP; this screen is for verification. Photograph it.\r\n");
-  Print (L"==============================================================\r\n");
+  B2LUiPrint (B2L_UI_BEYAZ, L"--------------------------------------------------------------");
+  B2LUiPrint (B2L_UI_BEYAZ, L" S10e (beyond0lte) - UEFI SELF TEST");
+  B2LUiPrint (B2L_UI_GRI,   L" No ESP; verification screen. Photograph.");
+  B2LUiPrint (B2L_UI_BEYAZ, L"--------------------------------------------------------------");
 
   B2LDrawDisplay ();
   B2LDrawMemory ();
@@ -294,18 +474,24 @@ B2LSelfTest (
 
   Status   = gBS->LocateProtocol (&gEfiAbsolutePointerProtocolGuid, NULL, (VOID **)&Abs);
   HasTouch = !EFI_ERROR (Status);
-  Print (L"Touch   : %a\r\n", HasTouch ? "AbsolutePointer present" : "none");
+  B2LUiPrint (
+    HasTouch ? B2L_UI_YESIL : B2L_UI_KIRMIZI,
+    L"Touch   : %a",
+    HasTouch ? "AbsolutePointer present" : "none"
+    );
   if (HasTouch && (Abs->Mode != NULL)) {
-    Print (L"Touch.m : %u x %u\r\n",
-           (UINT32)Abs->Mode->AbsoluteMaxX,
-           (UINT32)Abs->Mode->AbsoluteMaxY);
+    B2LUiPrint (
+      B2L_UI_BEYAZ,
+      L"Touch.m : %u x %u",
+      (UINT32)Abs->Mode->AbsoluteMaxX,
+      (UINT32)Abs->Mode->AbsoluteMaxY
+      );
   }
 
   //
   // Surucu teshis protokolu: bring-up'ta yazilan/okunan register degerleri.
   // be/af = 0x30 touch-function oncesi/sonrasi, pm = 0xE4 power mode,
-  // ok = bring-up yazilari basarili mi. Bu satir komut haritasinin dogru
-  // oldugunu ve denetleyicinin bu degerleri kabul ettigini gosterir.
+  // ok = bring-up yazilari basarili mi.
   //
   Status = gBS->LocateProtocol (
                   (EFI_GUID *)(VOID *)&mB2LTouchDiagGuid,
@@ -314,10 +500,11 @@ B2LSelfTest (
                   );
   if (EFI_ERROR (Status) || (TouchDiag == NULL)) {
     TouchDiag = NULL;
-    Print (L"Touch.fn: no diag protocol\r\n");
+    B2LUiPrint (B2L_UI_KIRMIZI, L"Touch.fn: no diag protocol");
   } else {
-    Print (
-      L"Touch.fn: be=%02x%02x af=%02x%02x pm=%02x ok=%u\r\n",
+    B2LUiPrint (
+      TouchDiag->Diag.BringUpOk ? B2L_UI_YESIL : B2L_UI_KIRMIZI,
+      L"Touch.fn: be=%02x%02x af=%02x%02x pm=%02x ok=%u",
       TouchDiag->Diag.FnBefore[0],
       TouchDiag->Diag.FnBefore[1],
       TouchDiag->Diag.FnAfter[0],
@@ -327,13 +514,16 @@ B2LSelfTest (
       );
   }
 
-  Print (L"--------------------------------------------------------------\r\n");
-  Print (L"VolUp=Up  VolDown=Down  Bixby=Enter  Bixby(hold)=Esc\r\n");
-  Print (L"Touch panel -> Touch.dx hit should grow; exit: Bixby(hold)+Volume\r\n");
+  B2LUiPrint (B2L_UI_BEYAZ, L"--------------------------------------------------------------");
+  B2LUiPrint (B2L_UI_GRI,   L"VolUp=Up VolDown=Down Bixby=Enter");
+  B2LUiPrint (B2L_UI_GRI,   L"Bixby(hold)=Esc  Exit: Bixby+Vol");
+  B2LUiPrint (B2L_UI_GRI,   L"Touch panel: Touch.dx hit should grow");
 
-  if ((gST->ConOut != NULL) && (gST->ConOut->Mode != NULL)) {
-    DynRow = (UINTN)gST->ConOut->Mode->CursorRow;
-  }
+  //
+  // Statik bolge buraya kadar cizildi. Asagisi her karede temizlenip
+  // yeniden cizilecek canli bolge.
+  //
+  DynTop = mUiY;
 
   for (;;) {
     //
@@ -343,12 +533,8 @@ B2LSelfTest (
     //
     gBS->RestoreTPL (gBS->RaiseTPL (TPL_HIGH_LEVEL));
 
-    if (gST->ConOut != NULL) {
-      gST->ConOut->SetCursorPosition (gST->ConOut, 0, DynRow);
-    }
-
-    Print (L"Key     : %s                                \r\n", LastKey);
-    Print (L"Touch   : %s                                \r\n", LastTouch);
+    B2LUiClearFrom (DynTop);
+    mUiY = DynTop;
 
     if ((gST->ConIn != NULL) && (gST->ConIn->ReadKeyStroke != NULL)) {
       Status = gST->ConIn->ReadKeyStroke (gST->ConIn, &Key);
@@ -401,11 +587,19 @@ B2LSelfTest (
           TouchState.ActiveButtons
           );
       }
+    }
 
-      Print (L"Touch.dx: st=%r poll=%u hit=%u               \r\n",
-             TouchStatus,
-             (UINT32)TouchPolls,
-             (UINT32)TouchHits);
+    B2LUiPrint (B2L_UI_BEYAZ, L"Key     : %s", LastKey);
+    B2LUiPrint (HasTouch ? B2L_UI_YESIL : B2L_UI_GRI, L"Touch   : %s", LastTouch);
+
+    if (HasTouch) {
+      B2LUiPrint (
+        EFI_ERROR (TouchStatus) ? B2L_UI_SARI : B2L_UI_YESIL,
+        L"Touch.dx: st=%r poll=%u hit=%u",
+        TouchStatus,
+        (UINT32)TouchPolls,
+        (UINT32)TouchHits
+        );
     }
 
     if (TouchDiag != NULL) {
@@ -414,18 +608,25 @@ B2LSelfTest (
       // st=status/gesture olayi, co=koordinat olayi, ig=parse edilip
       // kuyruga girmeyen. co artip hit artmiyorsa parser sorunlu; co=0 ama
       // poll artiyorsa denetleyici hala olay uretmiyor (~touch function).
+      // Iki satira bolundu: buyuk yazida satir genisligi ~44 karakter.
       //
-      Print (
-        L"Touch.ev: poll=%u empty=%u err=%u st=%u co=%u ig=%u\r\n",
+      B2LUiPrint (
+        B2L_UI_GRI,
+        L"Touch.ev: poll=%u empty=%u err=%u",
         TouchDiag->Diag.Polls,
         TouchDiag->Diag.Empty,
-        TouchDiag->Diag.Errors,
+        TouchDiag->Diag.Errors
+        );
+      B2LUiPrint (
+        B2L_UI_GRI,
+        L"Touch.ev: st=%u co=%u ig=%u",
         TouchDiag->Diag.StatusEvents,
         TouchDiag->Diag.CoordEvents,
         TouchDiag->Diag.Ignored
         );
-      Print (
-        L"Touch.raw: %02x %02x %02x %02x %02x %02x %02x %02x\r\n",
+      B2LUiPrint (
+        B2L_UI_GRI,
+        L"Touch.raw: %02x %02x %02x %02x %02x %02x %02x %02x",
         TouchDiag->Diag.LastEvent[0],
         TouchDiag->Diag.LastEvent[1],
         TouchDiag->Diag.LastEvent[2],
@@ -444,12 +645,9 @@ B2LSelfTest (
     gBS->Stall (20000);
   }
 
-  if (gST->ConOut != NULL) {
-    gST->ConOut->SetCursorPosition (gST->ConOut, 0, DynRow);
-  }
-
-  Print (L"Exiting; device will power off.                    \r\n");
-  Print (L"                                                  \r\n");
+  B2LUiClearFrom (DynTop);
+  mUiY = DynTop;
+  B2LUiPrint (B2L_UI_BEYAZ, L"Exiting; device will power off.");
   gBS->Stall (2000000);
 }
 
