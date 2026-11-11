@@ -339,7 +339,7 @@ Yang ditampilkan (dan nilai yang benar):
 | Baris | Arti | Nilai benar |
 | --- | --- | --- |
 | `Display` | mode GOP aktif | 1080×2280 |
-| `RAM` | total DRAM terdeskripsi + memori bebas | `6144 MB`; free ≠ 0 |
+| `RAM` | total DRAM terdeskripsi + memori bebas | ≈ `6144 MB` (6 GiB); free ≠ 0 |
 | `Memmap` | jumlah descriptor + alamat akhir tertinggi | `max end 0x980000000` |
 | `RAM >=0x980000000` | sanity DRAM S10e | `yok (dogru)` |
 | `Block IO` | perangkat block terpasang | UFS ≈ 122 GB |
