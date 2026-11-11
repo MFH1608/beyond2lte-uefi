@@ -21,6 +21,7 @@
   DebugLib
   IoLib
   MemoryAllocationHelperLib
+  TimerLib
   UefiBootServicesTableLib
   UefiDriverEntryPoint
 

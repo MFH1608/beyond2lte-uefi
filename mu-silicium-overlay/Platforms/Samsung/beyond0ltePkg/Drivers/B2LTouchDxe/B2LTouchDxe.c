@@ -11,6 +11,7 @@
 
 #include <Library/BaseMemoryLib.h>
 #include <Library/DebugLib.h>
+#include <Library/TimerLib.h>
 #include <Library/UefiBootServicesTableLib.h>
 #include <Library/UefiDriverEntryPoint.h>
 
@@ -32,6 +33,14 @@
 #define B2L_POINTER_QUEUE_SIZE       32
 #define B2L_TOUCH_POLL_INTERVAL      200000ULL // 20 ms in 100 ns units
 #define B2L_TOUCH_ERROR_BACKOFF_TICKS 50       // Retry failed I2C after 1 s
+//
+// GetState() uzerinden istege bagli yoklama araligi. BDS'in "no OS"
+// ekrani gibi kendi dongusunde calisan tuketiciler gBS->Stall ile
+// beklediginden TPL_CALLBACK zamanlayicisi hic calismayabilir; bu yuzden
+// GetState kuyrugu bos gorurse kendisi de (en fazla bu aralikta bir)
+// denetleyiciyi okur.
+//
+#define B2L_TOUCH_ONDEMAND_INTERVAL_NS  20000000ULL // 20 ms
 
 typedef struct {
   EFI_ABSOLUTE_POINTER_PROTOCOL  Protocol;
@@ -45,6 +54,7 @@ typedef struct {
   UINTN                          ErrorCount;
   EFI_EVENT                      PollTimer;
   UINTN                          PollBackoffTicks;
+  UINT64                         LastPollNs;
 } B2L_TOUCH_CONTEXT;
 
 STATIC B2L_TOUCH_CONTEXT  mTouch;
@@ -67,6 +77,15 @@ WriteCommand (
   )
 {
   return B2LHsI2cWriteRead (&Command, 1, NULL, 0);
+}
+
+STATIC
+UINT64
+TouchNowNs (
+  VOID
+  )
+{
+  return GetTimeInNanoSecond (GetPerformanceCounter ());
 }
 
 STATIC
@@ -177,7 +196,8 @@ PollEvents (
   }
 
 Exit:
-  Context->Polling = FALSE;
+  Context->Polling     = FALSE;
+  Context->LastPollNs  = TouchNowNs ();
   if (EFI_ERROR (Status)) {
     Context->ErrorCount++;
     if ((Context->ErrorCount == 1) || ((Context->ErrorCount & 0x3F) == 0)) {
@@ -303,12 +323,33 @@ TouchGetState (
   OUT EFI_ABSOLUTE_POINTER_STATE     *State
   )
 {
+  EFI_STATUS  Status;
+
   if ((This != &mTouch.Protocol) || (State == NULL)) {
     return EFI_INVALID_PARAMETER;
   }
 
   if (QueueIsEmpty (&mTouch)) {
-    return EFI_NOT_READY;
+    //
+    // Kendi dongusunde calisan tuketiciler (ornegin BDS'in no-OS self-test
+    // ekrani) gBS->Stall ile bekledigi icin periyodik TPL_CALLBACK
+    // zamanlayicisi hic islemeyebilir. Kuyruk bossa ve son yoklamadan bu
+    // yana yeterince sure gectiyse burada da denetleyiciyi oku.
+    //
+    Status = EFI_NOT_READY;
+    if (!mTouch.Polling &&
+        ((TouchNowNs () - mTouch.LastPollNs) >= B2L_TOUCH_ONDEMAND_INTERVAL_NS))
+    {
+      Status = PollEvents (&mTouch);
+    }
+
+    if (QueueIsEmpty (&mTouch)) {
+      //
+      // EFI_NOT_READY = okuma basarili ama FIFO bos (dokunma yok / panel
+      // taramiyor); EFI_DEVICE_ERROR = I2C okumasi basarisiz.
+      //
+      return EFI_ERROR (Status) ? EFI_DEVICE_ERROR : EFI_NOT_READY;
+    }
   }
 
   CopyMem (State, &mTouch.Queue[mTouch.QueueHead], sizeof (*State));

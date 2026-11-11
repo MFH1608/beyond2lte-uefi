@@ -227,13 +227,19 @@ B2LSelfTest (
   EFI_INPUT_KEY                  Key;
   BOOLEAN                        HasTouch;
   BOOLEAN                        Exit;
+  EFI_STATUS                     TouchStatus;
+  UINT32                         TouchPolls;
+  UINT32                         TouchHits;
   UINTN                          DynRow;
   CHAR16                         LastKey[56];
-  CHAR16                         LastTouch[56];
+  CHAR16                         LastTouch[80];
 
-  HasTouch = FALSE;
-  Exit     = FALSE;
-  DynRow   = 0;
+  HasTouch    = FALSE;
+  Exit        = FALSE;
+  TouchStatus = EFI_NOT_READY;
+  TouchPolls  = 0;
+  TouchHits   = 0;
+  DynRow      = 0;
 
   if (gST->ConOut != NULL) {
     gST->ConOut->ClearScreen (gST->ConOut);
@@ -255,16 +261,28 @@ B2LSelfTest (
   Status   = gBS->LocateProtocol (&gEfiAbsolutePointerProtocolGuid, NULL, (VOID **)&Abs);
   HasTouch = !EFI_ERROR (Status);
   Print (L"Touch   : %a\r\n", HasTouch ? "AbsolutePointer var" : "yok");
+  if (HasTouch && (Abs->Mode != NULL)) {
+    Print (L"Touch.m : %u x %u\r\n",
+           (UINT32)Abs->Mode->AbsoluteMaxX,
+           (UINT32)Abs->Mode->AbsoluteMaxY);
+  }
 
   Print (L"--------------------------------------------------------------\r\n");
   Print (L"VolUp=Up  VolDown=Down  Bixby=Enter  Bixby(tahan)=Esc\r\n");
-  Print (L"Cikis: Bixby(tahan) + Volume kiri/kanan -> kapat\r\n");
+  Print (L"Sentuh layar -> Touch.dx hit artmali; cikis: Bixby(tahan)+Volume\r\n");
 
   if ((gST->ConOut != NULL) && (gST->ConOut->Mode != NULL)) {
     DynRow = (UINTN)gST->ConOut->Mode->CursorRow;
   }
 
   for (;;) {
+    //
+    // Bu dongu kendi govdesinde gBS->Stall ile bekledigi icin TPL_CALLBACK
+    // zamanlayicilari (ornegin touch yoklama) kendiliginden islemez.
+    // Raise/RestoreTPL cifti bekleyen tum notify fonksiyonlarini pompalar.
+    //
+    gBS->RestoreTPL (gBS->RaiseTPL (TPL_HIGH_LEVEL));
+
     if (gST->ConOut != NULL) {
       gST->ConOut->SetCursorPosition (gST->ConOut, 0, DynRow);
     }
@@ -304,8 +322,15 @@ B2LSelfTest (
     }
 
     if (HasTouch) {
-      Status = Abs->GetState (Abs, &TouchState);
-      if (!EFI_ERROR (Status)) {
+      //
+      // Teshis: st=GetState sonucu, poll=kac kez cagrildi, hit=state donen
+      // cagri sayisi. st surekli NOT_READY ise denetleyici olay uretmiyor;
+      // poll artmiyorsa GetState hic cagrilmiyor demektir.
+      //
+      TouchPolls++;
+      TouchStatus = Abs->GetState (Abs, &TouchState);
+      if (!EFI_ERROR (TouchStatus)) {
+        TouchHits++;
         UnicodeSPrint (
           LastTouch,
           sizeof (LastTouch),
@@ -316,6 +341,11 @@ B2LSelfTest (
           TouchState.ActiveButtons
           );
       }
+
+      Print (L"Touch.dx: st=%r poll=%u hit=%u               \r\n",
+             TouchStatus,
+             (UINT32)TouchPolls,
+             (UINT32)TouchHits);
     }
 
     if (Exit) {
