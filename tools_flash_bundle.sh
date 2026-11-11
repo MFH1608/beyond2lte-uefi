@@ -10,21 +10,23 @@
 #
 # Kullanim:
 #   bash tools_flash_bundle.sh -d beyond0lte
-#   bash tools_flash_bundle.sh -d beyond2lte
+#   bash tools_flash_bundle.sh -d beyond2lte -o ~/Downloads
 #
-# Cikti:
-#   out/<dev>-flash/        (klasor)
-#   out/<dev>-flash.zip     (ayni klasorun zip'i)
+# Cikti (varsayilan: out/):
+#   <outdir>/<dev>-flash/        (klasor)
+#   <outdir>/<dev>-flash.zip     (ayni klasorun zip'i)
 #
 set -euo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 OUT="$HERE/out"
+OUTDIR="$OUT"
 DEV="${B2L_DEVICE:-beyond2lte}"
 
 while [ $# -gt 0 ]; do
   case "$1" in
     -d|--device) DEV="${2:?-d icin cihaz adi gerekli}"; shift ;;
+    -o|--output) OUTDIR="${2:?-o icin klasor gerekli}"; shift ;;
     -h|--help)   sed -n '2,18p' "$0"; exit 0 ;;
     *)           echo "Bilinmeyen arguman: $1" >&2; exit 1 ;;
   esac
@@ -33,8 +35,8 @@ done
 
 TAR="$OUT/uefi-boot.tar"
 IMG="$OUT/Mu-${DEV}.img"
-BUNDLE="$OUT/${DEV}-flash"
-ZIP="$OUT/${DEV}-flash.zip"
+BUNDLE="$OUTDIR/${DEV}-flash"
+ZIP="$OUTDIR/${DEV}-flash.zip"
 
 say()  { printf '\n\033[1;36m==> %s\033[0m\n' "$*"; }
 fail() { echo "HATA: $*" >&2; exit 1; }
@@ -136,7 +138,7 @@ EOF
 
 say "Zip olusturuluyor: $ZIP"
 rm -f "$ZIP"
-( cd "$OUT" && zip -q -r "$(basename "$ZIP")" "$(basename "$BUNDLE")" )
+( cd "$OUTDIR" && zip -q -r "$(basename "$ZIP")" "$(basename "$BUNDLE")" )
 
 say "Dogrulama"
 ( cd "$BUNDLE" && sha256sum -c SHA256SUMS )
@@ -157,9 +159,11 @@ done
 
 cat <<EOF
 
-Hazir: out/${DEV}-flash/  ve  out/${DEV}-flash.zip
+Hazir:
+  $BUNDLE/
+  $ZIP
 
   Odin   -> AP: uefi-boot.tar   (Re-Partition KAPALI)
   Linux  -> heimdall flash --BOOT Mu-${DEV}.img
-  Detay  -> out/${DEV}-flash/BACA-INI.txt
+  Detay  -> $BUNDLE/BACA-INI.txt
 EOF

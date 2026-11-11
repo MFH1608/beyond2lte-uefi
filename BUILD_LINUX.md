@@ -117,8 +117,8 @@ Bundel flash (tar + image + panduan + checksum) untuk dikirim ke mesin
 flashing:
 
 ```bash
-bash tools_flash_bundle.sh -d beyond0lte
-# -> out/beyond0lte-flash/  dan  out/beyond0lte-flash.zip
+bash tools_flash_bundle.sh -d beyond0lte                 # -> out/
+bash tools_flash_bundle.sh -d beyond0lte -o ~/Downloads  # -> ~/Downloads/
 ```
 
 ### Isi `Mu-beyond0lte.img`
