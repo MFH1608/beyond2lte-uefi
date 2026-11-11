@@ -341,7 +341,7 @@ Yang ditampilkan (dan nilai yang benar):
 | `Display` | mode GOP aktif | 1080×2280 |
 | `RAM` | usable/free dari memory map | usable ≈ 6144 MB, free ≠ 0 |
 | `Memmap` | jumlah descriptor + alamat tertinggi | max < `0x980000000` |
-| `Bank >=0x980000000` | sanity DRAM S10e | `yok (dogru)` |
+| `RAM >=0x980000000` | sanity DRAM S10e | `yok (dogru)` |
 | `Block IO` | perangkat block terpasang | UFS ≈ 122 GB |
 | `FAT/FS` | volume FAT terpasang | `0 volume` (memang belum ada ESP) |
 | `Touch` | `EFI_ABSOLUTE_POINTER_PROTOCOL` | `AbsolutePointer var` |
@@ -358,7 +358,7 @@ Override ini hanya terpasang di `beyond0lte.dsc`. Salinan
 
 | Tanggal | SHA-256 `uefi-boot.tar` | Foto/hasil | Catatan |
 | --- | --- | --- | --- |
-| (menunggu flash) | `25c8f550d9a816e45cd4c9b322cfed4c7d2840ef7c2e7c6cb4be8d996a02c980` | — | — |
+| (menunggu flash) | `7c4d4b8aae4aca3b792fed8e0ad3a3cfa060745904579ea77ca428941f87161e` | — | — |
 
 ---
 

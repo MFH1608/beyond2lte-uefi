@@ -31,8 +31,10 @@
 #include <Protocol/SimpleTextIn.h>
 
 //
-// S10e'de son DRAM banki 0x980000000'da bitiyor; bu adresin ustunde
-// descriptor OLMAMALI. Bu satir MemoryMapLib'in dogru calistigini gosterir.
+// S10e'de son DRAM banki 0x980000000'da bitiyor (0x80000000..0x100000000 +
+// 0x880000000..0x980000000 = 6 GiB). Bu adresin ustunde, var olmayan DRAM'i
+// tarif eden BIR descriptor OLMAMALI; bu satir MemoryMapLib'in dogru
+// calistigini gosterir. Yuksek adresli MMIO (varsa) zararsiz sayilir.
 //
 #define B2L_MMIO_LIMIT  0x980000000ULL
 
@@ -123,7 +125,16 @@ B2LDrawMemory (
       Highest = End;
     }
 
-    if (D->PhysicalStart >= B2L_MMIO_LIMIT) {
+    //
+    // MMIO descriptor'lari bu sinirin ustunde olabilir (PCIe vb.) ve zararsizdir.
+    // Portun degismez kurali: S10e'de var olmayan DRAM'i tarif eden BIR
+    // descriptor bulunmamasi. Bu yuzden yalnizca MMIO OLMAYAN descriptorlara
+    // bakiyoruz.
+    //
+    if ((D->PhysicalStart >= B2L_MMIO_LIMIT) &&
+        (D->Type != EfiMemoryMappedIO) &&
+        (D->Type != EfiMemoryMappedIOPortSpace))
+    {
       AboveLimit = TRUE;
     }
   }
@@ -132,7 +143,7 @@ B2LDrawMemory (
          (UINT32)DivU64x32 (TotalRam, 1024 * 1024),
          (UINT32)DivU64x32 (FreeRam, 1024 * 1024));
   Print (L"Memmap  : %u desc, max 0x%lx\r\n", (UINT32)Count, Highest);
-  Print (L"Bank >=0x980000000 : %a\r\n",
+  Print (L"RAM >=0x980000000  : %a\r\n",
          AboveLimit ? "ADA (SALAH)" : "yok (dogru)");
 
   FreePool (Map);
