@@ -339,17 +339,22 @@ Yang ditampilkan (dan nilai yang benar):
 | Baris | Arti | Nilai benar |
 | --- | --- | --- |
 | `Display` | mode GOP aktif | 1080×2280 |
-| `RAM` | usable/free dari memory map | usable ≈ 6144 MB, free ≠ 0 |
-| `Memmap` | jumlah descriptor + alamat tertinggi | max < `0x980000000` |
+| `RAM` | total DRAM terdeskripsi + memori bebas | `6144 MB`; free ≠ 0 |
+| `Memmap` | jumlah descriptor + alamat akhir tertinggi | `max end 0x980000000` |
 | `RAM >=0x980000000` | sanity DRAM S10e | `yok (dogru)` |
 | `Block IO` | perangkat block terpasang | UFS ≈ 122 GB |
 | `FAT/FS` | volume FAT terpasang | `0 volume` (memang belum ada ESP) |
 | `Touch` | `EFI_ABSOLUTE_POINTER_PROTOCOL` | `AbsolutePointer var` |
 | `Key` / `Touch` (bawah) | uji tombol/sentuh live | berubah saat ditekan |
 
+Kalau `RAM` menunjukkan **8192 MB**, itu tanda bank S10+ (`0x980000000..0xA00000000`)
+masih ikut terpetakan — berarti `MemoryMapLib` salah memakai salinan S10+.
+`6144 MB` adalah angka yang benar untuk 6/128.
+
 Keluar/matikan: **tahan Bixby, lalu tekan Volume Up/Down** (menghasilkan
 `Left`/`Right`). Setelah keluar, firmware melanjutkan jalur "no OS" dan
-mematikan perangkat.
+mematikan perangkat (BDS menampilkan "No Operating System Found!", jeda
+~10 dtk, lalu mati).
 
 Override ini hanya terpasang di `beyond0lte.dsc`. Salinan
 `beyond2ltePkg` tidak disentuh, jadi jalur "no OS" S10+ tetap seperti semula.
@@ -358,7 +363,7 @@ Override ini hanya terpasang di `beyond0lte.dsc`. Salinan
 
 | Tanggal | SHA-256 `uefi-boot.tar` | Foto/hasil | Catatan |
 | --- | --- | --- | --- |
-| (menunggu flash) | `7c4d4b8aae4aca3b792fed8e0ad3a3cfa060745904579ea77ca428941f87161e` | — | — |
+| (menunggu flash) | `39c74756e2019de1cd1b6cb888816287ce906fe884a3b4606e74acb5a96e1a60` | — | — |
 
 ---
 

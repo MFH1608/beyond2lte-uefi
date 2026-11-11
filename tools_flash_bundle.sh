@@ -110,8 +110,8 @@ Setelah boot, firmware mencetak layar:
 
 Periksa / foto layar itu dan bandingkan dengan PORT_S10E.md (§6.2):
   Display : resolusi dan nomor mode GOP
-  RAM     : usable ~6 GiB (6144 MB); "free" tidak nol
-  Memmap  : max harus < 0x980000000
+  RAM     : "6144 MB DRAM" (seluruh 6 GiB terdeskripsi); free tidak nol
+  Memmap  : "max end 0x980000000" (tidak boleh lebih)
   RAM >=0x980000000  : "yok (dogru)"  <-- bila "ADA (SALAH)" -> memmap salah
   Block IO: jumlah perangkat + ukuran MB tiap device (UFS ~122 GB)
   FAT/FS  : 0 volume adalah normal (belum ada ESP)

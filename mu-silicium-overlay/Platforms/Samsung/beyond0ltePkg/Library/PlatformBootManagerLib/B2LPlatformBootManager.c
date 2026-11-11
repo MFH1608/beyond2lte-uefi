@@ -40,25 +40,11 @@
 
 STATIC
 BOOLEAN
-B2LIsUsableRam (
+B2LIsMmio (
   IN EFI_MEMORY_TYPE  Type
   )
 {
-  switch (Type) {
-    case EfiConventionalMemory:
-    case EfiBootServicesCode:
-    case EfiBootServicesData:
-    case EfiLoaderCode:
-    case EfiLoaderData:
-    case EfiRuntimeServicesCode:
-    case EfiRuntimeServicesData:
-    case EfiACPIReclaimMemory:
-    case EfiACPIMemoryNVS:
-      return TRUE;
-
-    default:
-      return FALSE;
-  }
+  return (Type == EfiMemoryMappedIO) || (Type == EfiMemoryMappedIOPortSpace);
 }
 
 STATIC
@@ -76,7 +62,7 @@ B2LDrawMemory (
   UINTN                  Index;
   EFI_MEMORY_DESCRIPTOR  *Map;
   EFI_MEMORY_DESCRIPTOR  *D;
-  UINT64                 TotalRam;
+  UINT64                 DramTotal;
   UINT64                 FreeRam;
   UINT64                 Highest;
   UINT64                 End;
@@ -103,7 +89,7 @@ B2LDrawMemory (
     return;
   }
 
-  TotalRam   = 0;
+  DramTotal  = 0;
   FreeRam    = 0;
   Highest    = 0;
   AboveLimit = FALSE;
@@ -112,37 +98,36 @@ B2LDrawMemory (
   for (Index = 0; Index < Count; Index++) {
     D = (EFI_MEMORY_DESCRIPTOR *)((UINT8 *)Map + Index * DescSize);
 
-    if (B2LIsUsableRam (D->Type)) {
-      TotalRam += MultU64x64 (D->NumberOfPages, 4096);
+    End = D->PhysicalStart + MultU64x64 (D->NumberOfPages, 4096);
+
+    //
+    // MMIO haritada yuksek adreslerde gorunebilir; onu DRAM saymadan
+    // yalnizca RAM'i topla. S10e'de 6 GiB'in TAMAMI (rezerv dahil) tarif
+    // edilmis olmali -> toplam 6144 MB cikar.
+    //
+    if (!B2LIsMmio (D->Type)) {
+      if (D->PhysicalStart < B2L_MMIO_LIMIT) {
+        DramTotal += MultU64x64 (D->NumberOfPages, 4096);
+      }
+
+      if (D->PhysicalStart >= B2L_MMIO_LIMIT) {
+        AboveLimit = TRUE;
+      }
     }
 
     if (D->Type == EfiConventionalMemory) {
       FreeRam += MultU64x64 (D->NumberOfPages, 4096);
     }
 
-    End = D->PhysicalStart + MultU64x64 (D->NumberOfPages, 4096);
     if (End > Highest) {
       Highest = End;
     }
-
-    //
-    // MMIO descriptor'lari bu sinirin ustunde olabilir (PCIe vb.) ve zararsizdir.
-    // Portun degismez kurali: S10e'de var olmayan DRAM'i tarif eden BIR
-    // descriptor bulunmamasi. Bu yuzden yalnizca MMIO OLMAYAN descriptorlara
-    // bakiyoruz.
-    //
-    if ((D->PhysicalStart >= B2L_MMIO_LIMIT) &&
-        (D->Type != EfiMemoryMappedIO) &&
-        (D->Type != EfiMemoryMappedIOPortSpace))
-    {
-      AboveLimit = TRUE;
-    }
   }
 
-  Print (L"RAM     : %u MB usable, %u MB free\r\n",
-         (UINT32)DivU64x32 (TotalRam, 1024 * 1024),
+  Print (L"RAM     : %u MB DRAM, %u MB free\r\n",
+         (UINT32)DivU64x32 (DramTotal, 1024 * 1024),
          (UINT32)DivU64x32 (FreeRam, 1024 * 1024));
-  Print (L"Memmap  : %u desc, max 0x%lx\r\n", (UINT32)Count, Highest);
+  Print (L"Memmap  : %u desc, max end 0x%lx\r\n", (UINT32)Count, Highest);
   Print (L"RAM >=0x980000000  : %a\r\n",
          AboveLimit ? "ADA (SALAH)" : "yok (dogru)");
 
