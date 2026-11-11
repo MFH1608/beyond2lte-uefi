@@ -100,5 +100,5 @@ B2LSecTsRemainingEvents (
     return 0;
   }
 
-  return Event[7] & 0x3F;
+  return Event[7] & 0x1F;
 }

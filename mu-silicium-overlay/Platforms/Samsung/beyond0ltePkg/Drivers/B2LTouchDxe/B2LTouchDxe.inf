@@ -10,6 +10,7 @@
   B2LHsI2c.c
   B2LSecTsParser.c
   B2LTouchDxe.c
+  B2LTouchDiag.h
 
 [Packages]
   MdePkg/MdePkg.dec

@@ -38,6 +38,38 @@
 //
 #define B2L_MMIO_LIMIT  0x980000000ULL
 
+//
+// B2LTouchDxe'nin yayinladigi teshis protokolu (bkz.
+// Drivers/B2LTouchDxe/B2LTouchDiag.h). Bu paketin .dec dosyasi build'e
+// bagli olmadigi icin Include yolu eklenemiyor; GUID ve yerlesim burada
+// yerel olarak tekrarlanir. Iki taraf AYNI kalmak zorundadir.
+//
+#define B2L_TOUCH_DIAG_PROTOCOL_GUID \
+  { 0x9c1f4b52, 0x8d36, 0x4c01, { 0xa7, 0x62, 0x51, 0x0e, 0x9b, 0x3d, 0x77, 0xc4 } }
+
+#define B2L_TOUCH_DIAG_EVENT_SIZE  8
+
+typedef struct {
+  UINT32  Polls;
+  UINT32  Empty;
+  UINT32  Errors;
+  UINT32  StatusEvents;
+  UINT32  CoordEvents;
+  UINT32  Ignored;
+  UINT8   LastEvent[B2L_TOUCH_DIAG_EVENT_SIZE];
+  UINT8   FnBefore[2];
+  UINT8   FnAfter[2];
+  UINT8   PowerMode;
+  UINT8   BringUpOk;
+  UINT8   Reserved[3];
+} B2L_TOUCH_DIAG;
+
+typedef struct {
+  B2L_TOUCH_DIAG  Diag;
+} B2L_TOUCH_DIAG_PROTOCOL;
+
+STATIC CONST EFI_GUID  mB2LTouchDiagGuid = B2L_TOUCH_DIAG_PROTOCOL_GUID;
+
 STATIC
 BOOLEAN
 B2LIsMmio (
@@ -225,6 +257,7 @@ B2LSelfTest (
   EFI_ABSOLUTE_POINTER_PROTOCOL  *Abs;
   EFI_ABSOLUTE_POINTER_STATE     TouchState;
   EFI_INPUT_KEY                  Key;
+  B2L_TOUCH_DIAG_PROTOCOL        *TouchDiag;
   BOOLEAN                        HasTouch;
   BOOLEAN                        Exit;
   EFI_STATUS                     TouchStatus;
@@ -239,6 +272,7 @@ B2LSelfTest (
   TouchStatus = EFI_NOT_READY;
   TouchPolls  = 0;
   TouchHits   = 0;
+  TouchDiag   = NULL;
   DynRow      = 0;
 
   if (gST->ConOut != NULL) {
@@ -265,6 +299,32 @@ B2LSelfTest (
     Print (L"Touch.m : %u x %u\r\n",
            (UINT32)Abs->Mode->AbsoluteMaxX,
            (UINT32)Abs->Mode->AbsoluteMaxY);
+  }
+
+  //
+  // Surucu teshis protokolu: bring-up'ta yazilan/okunan register degerleri.
+  // be/af = 0x30 touch-function oncesi/sonrasi, pm = 0xE4 power mode,
+  // ok = bring-up yazilari basarili mi. Bu satir komut haritasinin dogru
+  // oldugunu ve denetleyicinin bu degerleri kabul ettigini gosterir.
+  //
+  Status = gBS->LocateProtocol (
+                  (EFI_GUID *)(VOID *)&mB2LTouchDiagGuid,
+                  NULL,
+                  (VOID **)&TouchDiag
+                  );
+  if (EFI_ERROR (Status) || (TouchDiag == NULL)) {
+    TouchDiag = NULL;
+    Print (L"Touch.fn: teshis protokolu yok\r\n");
+  } else {
+    Print (
+      L"Touch.fn: be=%02x%02x af=%02x%02x pm=%02x ok=%u\r\n",
+      TouchDiag->Diag.FnBefore[0],
+      TouchDiag->Diag.FnBefore[1],
+      TouchDiag->Diag.FnAfter[0],
+      TouchDiag->Diag.FnAfter[1],
+      TouchDiag->Diag.PowerMode,
+      TouchDiag->Diag.BringUpOk
+      );
   }
 
   Print (L"--------------------------------------------------------------\r\n");
@@ -346,6 +406,35 @@ B2LSelfTest (
              TouchStatus,
              (UINT32)TouchPolls,
              (UINT32)TouchHits);
+    }
+
+    if (TouchDiag != NULL) {
+      //
+      // Teshis: poll=denetleyici okuma sayisi, empty=FIFO bos, err=I2C hatasi,
+      // st=status/gesture olayi, co=koordinat olayi, ig=parse edilip
+      // kuyruga girmeyen. co artip hit artmiyorsa parser sorunlu; co=0 ama
+      // poll artiyorsa denetleyici hala olay uretmiyor (~touch function).
+      //
+      Print (
+        L"Touch.ev: poll=%u empty=%u err=%u st=%u co=%u ig=%u\r\n",
+        TouchDiag->Diag.Polls,
+        TouchDiag->Diag.Empty,
+        TouchDiag->Diag.Errors,
+        TouchDiag->Diag.StatusEvents,
+        TouchDiag->Diag.CoordEvents,
+        TouchDiag->Diag.Ignored
+        );
+      Print (
+        L"Touch.raw: %02x %02x %02x %02x %02x %02x %02x %02x\r\n",
+        TouchDiag->Diag.LastEvent[0],
+        TouchDiag->Diag.LastEvent[1],
+        TouchDiag->Diag.LastEvent[2],
+        TouchDiag->Diag.LastEvent[3],
+        TouchDiag->Diag.LastEvent[4],
+        TouchDiag->Diag.LastEvent[5],
+        TouchDiag->Diag.LastEvent[6],
+        TouchDiag->Diag.LastEvent[7]
+        );
     }
 
     if (Exit) {

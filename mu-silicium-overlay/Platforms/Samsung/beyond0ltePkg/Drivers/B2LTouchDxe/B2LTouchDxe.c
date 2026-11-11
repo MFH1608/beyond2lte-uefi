@@ -19,14 +19,31 @@
 
 #include "B2LHsI2c.h"
 #include "B2LSecTsParser.h"
+#include "B2LTouchDiag.h"
 
 #define SEC_TS_CMD_SENSE_ON          0x10
 #define SEC_TS_READ_FIRMWARE_INTEGRITY 0x21
 #define SEC_TS_READ_DEVICE_ID        0x22
+#define SEC_TS_CMD_SET_TOUCHFUNCTION 0x30
 #define SEC_TS_READ_BOOT_STATUS      0x55
 #define SEC_TS_READ_ONE_EVENT        0x60
 #define SEC_TS_READ_ALL_EVENT        0x61
 #define SEC_TS_CMD_CLEAR_EVENT_STACK 0x62
+#define SEC_TS_CMD_SET_POWER_MODE    0xE4
+
+//
+// sec_ts dokunma islevleri: TOUCH|PALM|WET. Linux sec_ts "touch_functions"
+// registeri 16-bit little-endian'dir, bu yuzden iki bayt yazilir.
+//
+#define B2L_TOUCH_FUNCTION_TOUCH     (1 << 0)
+#define B2L_TOUCH_FUNCTION_PALM      (1 << 5)
+#define B2L_TOUCH_FUNCTION_WET       (1 << 6)
+#define B2L_TOUCH_FUNCTION_DEFAULT   (B2L_TOUCH_FUNCTION_TOUCH | \
+                                      B2L_TOUCH_FUNCTION_PALM  | \
+                                      B2L_TOUCH_FUNCTION_WET)
+
+#define SEC_TS_MODE_SCAN            0x00
+#define SEC_TS_MODE_LOWPOWER        0x01
 
 #define SEC_TS_STATUS_APP_MODE       0x20
 #define SEC_TS_MAX_EVENT_COUNT       32
@@ -59,6 +76,10 @@ typedef struct {
 
 STATIC B2L_TOUCH_CONTEXT  mTouch;
 
+STATIC B2L_TOUCH_DIAG_PROTOCOL  mTouchDiag;
+
+STATIC CONST EFI_GUID  mB2LTouchDiagProtocolGuid = B2L_TOUCH_DIAG_PROTOCOL_GUID;
+
 STATIC
 EFI_STATUS
 ReadCommand (
@@ -77,6 +98,28 @@ WriteCommand (
   )
 {
   return B2LHsI2cWriteRead (&Command, 1, NULL, 0);
+}
+
+STATIC
+EFI_STATUS
+WriteCommandData (
+  IN UINT8        Command,
+  IN CONST UINT8  *Data,
+  IN UINTN        DataLength
+  )
+{
+  UINT8  Buffer[4];
+
+  if (DataLength > (sizeof (Buffer) - 1)) {
+    return EFI_INVALID_PARAMETER;
+  }
+
+  Buffer[0] = Command;
+  if (DataLength != 0) {
+    CopyMem (&Buffer[1], Data, DataLength);
+  }
+
+  return B2LHsI2cWriteRead (Buffer, DataLength + 1, NULL, 0);
 }
 
 STATIC
@@ -129,11 +172,22 @@ ConsumeEvent (
 {
   B2L_SEC_TS_PARSE_RESULT  Result;
 
+  CopyMem (mTouchDiag.Diag.LastEvent, Event, B2L_TOUCH_DIAG_EVENT_SIZE);
+
+  if ((Event[0] & 0x03) == 0) {
+    mTouchDiag.Diag.CoordEvents++;
+  } else {
+    mTouchDiag.Diag.StatusEvents++;
+  }
+
   Result = B2LSecTsParseEvent (Event, &Context->Pointer);
   if (Result == B2LSecTsUpdated) {
     QueuePointerState (Context);
-  } else if (Result == B2LSecTsInvalid) {
-    DEBUG ((DEBUG_WARN, "B2LTouch: malformed sec_ts coordinate event\n"));
+  } else {
+    mTouchDiag.Diag.Ignored++;
+    if (Result == B2LSecTsInvalid) {
+      DEBUG ((DEBUG_WARN, "B2LTouch: malformed sec_ts coordinate event\n"));
+    }
   }
 }
 
@@ -152,6 +206,8 @@ PollEvents (
     return EFI_NOT_READY;
   }
 
+  mTouchDiag.Diag.Polls++;
+
   Context->Polling = TRUE;
   Status = ReadCommand (
              SEC_TS_READ_ONE_EVENT,
@@ -164,6 +220,7 @@ PollEvents (
 
   // Samsung sec_ts returns an all-zero first byte when its event FIFO is empty.
   if (Events[0][0] == 0) {
+    mTouchDiag.Diag.Empty++;
     Status = EFI_SUCCESS;
     goto Exit;
   }
@@ -199,6 +256,7 @@ Exit:
   Context->Polling     = FALSE;
   Context->LastPollNs  = TouchNowNs ();
   if (EFI_ERROR (Status)) {
+    mTouchDiag.Diag.Errors++;
     Context->ErrorCount++;
     if ((Context->ErrorCount == 1) || ((Context->ErrorCount & 0x3F) == 0)) {
       DEBUG ((
@@ -291,6 +349,10 @@ TouchReset (
   )
 {
   EFI_STATUS  Status;
+  UINT8       TouchFunction[2];
+  UINT8       PowerMode;
+  UINT8       ScanMode;
+  UINT8       ReadStatus;
 
   if (This != &mTouch.Protocol) {
     return EFI_INVALID_PARAMETER;
@@ -303,10 +365,54 @@ TouchReset (
   mTouch.ErrorCount       = 0;
   mTouch.PollBackoffTicks = 0;
 
-  Status = WriteCommand (SEC_TS_CMD_CLEAR_EVENT_STACK);
+  mTouchDiag.Diag.FnBefore[0] = 0xFF;
+  mTouchDiag.Diag.FnBefore[1] = 0xFF;
+  mTouchDiag.Diag.FnAfter[0]  = 0xFF;
+  mTouchDiag.Diag.FnAfter[1]  = 0xFF;
+  mTouchDiag.Diag.PowerMode   = 0xFF;
+  mTouchDiag.Diag.BringUpOk   = 0;
+
+  //
+  // sec_ts'i olay uretir hale getir. Probe basarili oldugu icin komut
+  // haritasi (0x21/0x22/0x55/0x60) ZATEN dogru; ayni haritadaki 0x30 ve
+  // 0xE4 de guvenle kullanilabilir. Linux sec_ts_reinit/start_device'in
+  // ozeti:
+  //   1) dokunma islev bitleri (0x30, 16-bit LE: TOUCH|PALM|WET)
+  //   2) LPM'deyse tarama moduna don (0xE4 = 0)
+  //   3) olay yigini temizle (0x62)
+  //   4) sensing ac (0x10)
+  //
+  Status = ReadCommand (SEC_TS_CMD_SET_TOUCHFUNCTION, mTouchDiag.Diag.FnBefore, 2);
+  if (EFI_ERROR (Status)) {
+    mTouchDiag.Diag.FnBefore[0] = 0xFF;
+    mTouchDiag.Diag.FnBefore[1] = 0xFF;
+  }
+
+  TouchFunction[0] = (UINT8)(B2L_TOUCH_FUNCTION_DEFAULT & 0xFF);
+  TouchFunction[1] = (UINT8)((B2L_TOUCH_FUNCTION_DEFAULT >> 8) & 0xFF);
+  Status = WriteCommandData (SEC_TS_CMD_SET_TOUCHFUNCTION, TouchFunction, 2);
+
+  if (!EFI_ERROR (Status)) {
+    ReadStatus = ReadCommand (SEC_TS_CMD_SET_POWER_MODE, &PowerMode, 1);
+    if (!EFI_ERROR (ReadStatus)) {
+      mTouchDiag.Diag.PowerMode = PowerMode;
+      if (PowerMode == SEC_TS_MODE_LOWPOWER) {
+        ScanMode = SEC_TS_MODE_SCAN;
+        WriteCommandData (SEC_TS_CMD_SET_POWER_MODE, &ScanMode, 1);
+      }
+    }
+  }
+
+  if (!EFI_ERROR (Status)) {
+    ReadCommand (SEC_TS_CMD_SET_TOUCHFUNCTION, mTouchDiag.Diag.FnAfter, 2);
+    Status = WriteCommand (SEC_TS_CMD_CLEAR_EVENT_STACK);
+  }
+
   if (!EFI_ERROR (Status)) {
     Status = WriteCommand (SEC_TS_CMD_SENSE_ON);
   }
+
+  mTouchDiag.Diag.BringUpOk = EFI_ERROR (Status) ? 0 : 1;
 
   if (!EFI_ERROR (Status) && ExtendedVerification) {
     Status = ProbeController ();
@@ -496,5 +602,17 @@ B2LTouchEntry (
   }
 
   DEBUG ((DEBUG_INFO, "B2LTouch: EFI Absolute Pointer installed\n"));
+
+  //
+  // Teshis protokolu kritik degil: basarisiz olsa da driver calismaya devam
+  // eder, sadece self-test ekrani ek satirlari gosteremez.
+  //
+  gBS->InstallProtocolInterface (
+         &ImageHandle,
+         (EFI_GUID *)(VOID *)&mB2LTouchDiagProtocolGuid,
+         EFI_NATIVE_INTERFACE,
+         &mTouchDiag
+         );
+
   return EFI_SUCCESS;
 }
