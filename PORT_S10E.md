@@ -176,8 +176,27 @@ bash yap.sh -d beyond0lte --acpi --clean
 
 Status: **build ini sudah terbukti berhasil** di Linux native (clang 23 /
 `CLANGPDB`, target `aarch64-unknown-windows-msvc`). Hasil: `Mu-beyond0lte.img`
-(4,4 MB), `uefi-boot.tar`, disalin ke `out/` dan ke folder `beyond0lte-flash/`
-di Desktop. Isi boot image dan catatan kompiler: `BUILD_LINUX.md`.
+(4,4 MB), `uefi-boot.tar`, disalin ke `out/`. Isi boot image dan catatan
+kompiler: `BUILD_LINUX.md`.
+
+### 4.1 Bundel flash siap kirim
+
+```bash
+bash tools_flash_bundle.sh -d beyond0lte
+```
+
+Menghasilkan `out/beyond0lte-flash/` (dan `.zip`) berisi:
+
+| Berkas | Untuk |
+|---|---|
+| `uefi-boot.tar` | Odin, slot **AP** (hanya berisi `boot.img`) |
+| `Mu-beyond0lte.img` | `heimdall flash --BOOT ...` di Linux |
+| `BACA-INI.txt` | langkah Odin/heimdall, verifikasi, rollback |
+| `SHA256SUMS` | `sha256sum -c SHA256SUMS` |
+
+Skrip memverifikasi bahwa `tar` hanya memuat `boot.img` **dan** byte-nya sama
+persis dengan `Mu-beyond0lte.img`, jadi tidak mungkin tertukar dengan image
+`beyond2lte`.
 
 Flash = sama seperti S10+ (BUILD.md §6):
 

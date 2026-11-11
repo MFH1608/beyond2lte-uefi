@@ -126,6 +126,7 @@ UEFI_beyond2lte/
 ├── tools_dtbo_extract.py    dtbo.img/dt.img cozucu (mkdtimg gerekmez)
 ├── tools_uefi_layout_check.py    FD/stack/framebuffer cakismasi denetimi (--device)
 ├── tools_reserved_memory_audit.py DTB rezervleri <-> MemoryMapLib denetimi (--device)
+├── tools_flash_bundle.sh    Odin AP + heimdall imaji + talimat (--device)
 ├── linux_test/              Linux kontrol deneyi (initramfs + init)
 ├── dtb-analiz/              stok DTB (dts) + cikarilan initcall listeleri
 ├── stockfirmware/           Samsung fabrika firmware'i (.tar.md5)

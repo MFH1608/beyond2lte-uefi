@@ -111,7 +111,15 @@ bash yap.sh -d beyond0lte --acpi --clean
 ```
 
 Keluaran di `~/Mu-Silicium`: `Mu-beyond0lte.img`, `uefi-boot.tar`; juga
-disalin ke `out/` (dan ke `${DEV}-flash/` bila Desktop ditemukan).
+disalin ke `out/`.
+
+Bundel flash (tar + image + panduan + checksum) untuk dikirim ke mesin
+flashing:
+
+```bash
+bash tools_flash_bundle.sh -d beyond0lte
+# -> out/beyond0lte-flash/  dan  out/beyond0lte-flash.zip
+```
 
 ### Isi `Mu-beyond0lte.img`
 
