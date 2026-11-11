@@ -66,7 +66,20 @@ cp -f "$IMG" "$BUNDLE/Mu-${DEV}.img"
 # Cihaza ozel uyarilar. Yalnizca S10e icin ek metin var; digerleri genel.
 #
 DEV_NOTE=""
+BOOT_CHECK="$(cat <<'EOF'
+Masuk ke EFI Shell / menu UEFI, lalu periksa:
+  memmap    -> total sekitar 6 GiB dan TIDAK ada baris >= 0x980000000
+  tombol Volume Up/Down harus menggerakkan pilihan menu
+  tombol Enter/Esc (lihat catatan tombol di bawah) untuk memilih/kembali
+(Bila muncul shell, itu tanda UEFI sudah berjalan.)
+EOF
+)"
 if [ "$DEV" = "beyond0lte" ]; then
+  #
+  # S10e'de ESP/FAT bolumu ve harf ureten klavye yok; bu yuzden Shell'e komut
+  # yazilamaz. Cihaz "OS yok" durumuna dustugunde firmware artik kapanmak
+  # yerine donanim self-test ekranini ciziyor (B2LPlatformBootManager.c).
+  #
   DEV_NOTE="$(cat <<'EOF'
 CATATAN KHUSUS S10e (beyond0lte)
 - Tombol power fisik unit ini mati, jadi tombol Bixby dipetakan ulang
@@ -83,6 +96,37 @@ CATATAN KHUSUS S10e (beyond0lte)
   perangkat hidup, ini tersangka pertama.
 - PIT: BEYOND2LTE_EUR_OPEN.pit di repo MILIK S10+ (offset berbeda).
   JANGAN dipakai dengan Re-Partition.
+- Perangkat ini TIDAK punya ESP/FAT maupun keyboard huruf. Bila firmware
+  tidak menemukan OS, ia tidak lagi langsung mati: muncul layar
+  "UEFI SELF TEST" (lihat bagian SETELAH BOOT). Tombol pada layar itu
+  hidup, jadi tekan-tombol bisa dicoba langsung tanpa alat lain.
+EOF
+)"
+  BOOT_CHECK="$(cat <<'EOF'
+Tidak perlu Shell: perangkat ini tidak punya ESP/FAT maupun keyboard huruf.
+Setelah boot, firmware mencetak layar:
+
+      S10e (beyond0lte) - UEFI SELF TEST
+
+Periksa / foto layar itu dan bandingkan dengan PORT_S10E.md (§6.2):
+  Display : resolusi dan nomor mode GOP
+  RAM     : usable ~6 GiB (6144 MB); "free" tidak nol
+  Memmap  : max harus < 0x980000000
+  Bank >=0x980000000 : "yok (dogru)"  <-- bila "ADA (SALAH)" -> memmap salah
+  Block IO: jumlah perangkat + ukuran MB tiap device (UFS ~122 GB)
+  FAT/FS  : 0 volume adalah normal (belum ada ESP)
+  Touch   : "AbsolutePointer var" -> panel sentuh terdeteksi driver
+  Key     : tekan tombol dan lihat baris ini berubah (uji live):
+              Volume Up   -> SCAN_UP
+              Volume Down -> SCAN_DOWN
+              Bixby       -> ENTER
+              Bixby tahan -> SCAN_ESC
+  Touch   : sentuh layar -> X/Y/Z muncul di baris Touch
+
+CARA MATIKAN / KELUAR dari layar ini:
+  tahan Bixby lalu tekan Volume Up atau Volume Down (menghasilkan
+  Left/Right). Setelah keluar firmware melanjutkan jalur "no OS" dan
+  mematikan cihaz.
 EOF
 )"
 fi
@@ -125,11 +169,7 @@ LANGKAH HEIMDALL (Linux)
 
 SETELAH BOOT
 ------------
-Masuk ke EFI Shell / menu UEFI, lalu periksa:
-  memmap    -> total sekitar 6 GiB dan TIDAK ada baris >= 0x980000000
-  tombol Volume Up/Down harus menggerakkan pilihan menu
-  tombol Enter/Esc (lihat catatan tombol di bawah) untuk memilih/kembali
-(Bila muncul shell, itu tanda UEFI sudah berjalan.)
+${BOOT_CHECK}
 
 ROLLBACK
 --------
