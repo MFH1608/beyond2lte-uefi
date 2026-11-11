@@ -419,6 +419,36 @@ sudah hidup.
 
 Muncul di build `59e8177`; bundle `uefi-boot.tar` SHA-256
 `3280baacfe50988e5f08b49517c11515f4d4364d3e5e52e168a160c1f2581e17`.
+
+Setelah build itu di-flash, `poll` memang naik tetapi `hit` tetap 0 dan
+`st=Not Ready`. Artinya event loop sudah beres, tetapi `sec_ts` sendiri
+belum menghasilkan event: kontroler belum masuk mode scan.
+
+Perbaikan kedua (build `6b683c1`) menambahkan *bring-up* ala
+`sec_ts_reinit`/`start_device` Linux:
+
+1. tulis *touch function* `0x30` (16-bit LE: `TOUCH|PALM|WET` = `0x61`),
+   lalu baca kembali nilai sebelum/sesudahnya;
+2. baca *power mode* `0xE4`; kalau masih LPM (`0x01`), tulis `0x00` (scan);
+3. `CLEAR_EVENT_STACK` (`0x62`), lalu `SENSE_ON` (`0x10`).
+
+Sebagai alat diagnosis, driver kini menerbitkan protokol lokal (GUID tetap,
+tanpa mengubah INF modul BDS) dan layar self-test mencetak:
+
+| Baris | Isi |
+| --- | --- |
+| `Touch.fn` | `be=xxxx af=xxxx pm=xx ok=n` — nilai `0x30` sebelum/sesudah, `0xE4`, dan apakah bring-up sukses |
+| `Touch.ev` | `poll empty err st co ig` — jumlah baca, FIFO kosong, error I2C, event status, event koordinat, event yang diabaikan |
+| `Touch.raw` | 8 byte terakhir yang dibaca dari FIFO |
+
+Interpretasi: `co` naik dan `hit` naik saat layar disentuh = jalur sentuh
+hidup; `poll` naik tetapi `empty` ikut naik dan `co=0` = kontroler masih
+belum mengirim event; `err` naik = masalah I2C.
+
+Bundle build `6b683c1`: `uefi-boot.tar` SHA-256
+`6ec796c1c1aa2439ed12f497a796a5821d40ef8712799d9894fe47332af26327`,
+`Mu-beyond0lte.img` SHA-256
+`82b0a450c0a1091b67d23203ddef5571d21273b0a34a597f69150104aa43bb6e`.
 **Status: menunggu pengujian ulang di perangkat** (hasil akan dicatat di
 sini).
 
