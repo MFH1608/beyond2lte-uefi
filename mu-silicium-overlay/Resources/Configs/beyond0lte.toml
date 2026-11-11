@@ -1,0 +1,34 @@
+#
+# Boot Shim Configs
+#
+[boot_shim]
+requires_kernel_header = true
+
+#
+# UEFI FD Configs
+#
+# BootShim, boot imajinin "kernel"i olarak yuklenir ve FD_SIZE kadar bayti
+# FD_BASE'e kopyalar. Degerler beyond0ltePkg/Library/MemoryMapLib/
+# MemoryMapLib.c ile BIREBIR ayni olmali; tools_uefi_layout_check.py bunu
+# her derlemeden once denetler.
+#
+# S10e'de FD_BASE = 0xC9000000 secildi: S-Boot ayni aileden, ve bu adres
+# hem beyond1lte hem beyond2lte'de dogrulandi. 4 MiB boyut, ayni bilesen
+# kumesini (Shell + suruculer + ACPI) tasidigimiz icin beyond2lte ile ayni.
+#
+[uefi_fd]
+base = 0xC9000000
+size = 0x400000
+
+#
+# Android Boot Image Kernel Configs
+#
+[boot_image_kernel]
+kernel_compression = "none"
+append_dtb         = true
+
+#
+# Android Boot Image Configs
+#
+[boot_image]
+header_version = 1

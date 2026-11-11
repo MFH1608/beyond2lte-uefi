@@ -6,6 +6,11 @@ Samsung Galaxy S10+ (SM-G975F, Exynos 9820) için UEFI firmware —
 Bu depo Mu-Silicium'un **fork'u değil**, üzerine kopyalanan bir *overlay*.
 Upstream'i güncel tutup bizim dosyalarımızı üzerine yazıyoruz.
 
+İkinci cihaz: **Galaxy S10e (SM-G970F, `beyond0lte`, 6/128)**. Aynı SoC
+(Exynos 9820) ve aynı S-Boot ailesi; farklar bellek (6 GiB), panel
+(1080×2280) ve DTB ile sınırlı. Derleme: `bash yap.sh -d beyond0lte`.
+Ayrıntı ve doğrulanmamış noktalar: [`PORT_S10E.md`](PORT_S10E.md).
+
 ## Durum
 
 | Özellik | Durum |
@@ -63,6 +68,7 @@ masaüstüne atar ve FV kullanımını raporlar.
 | [`UFS_DRIVER.md`](UFS_DRIVER.md) | UFS sürücü mimarisi ve CAL tabloları |
 | [`PARTITIONS.md`](PARTITIONS.md) | Bölüm tablosu (PIT'ten çıkarıldı) |
 | [`BUILD.md`](BUILD.md) | Derleme ve flash |
+| [`PORT_S10E.md`](PORT_S10E.md) | S10e (`beyond0lte`) portu — farklar, doğrulanacaklar |
 | [`ORTAM.md`](ORTAM.md) | Cihaz/bilgisayar referansı (projeden bağımsız) |
 
 ## Upstream'e gönderilecek düzeltmeler

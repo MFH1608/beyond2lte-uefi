@@ -1,0 +1,34 @@
+## @file
+#  EL2 yuku yukleyici. Tasarim: B2LEl2Payload.S basindaki aciklama.
+#
+#  DXE_DRIVER yeterli: yuk EL2'ye kopyalandiktan sonra bu surucunun isi
+#  bitiyor. Runtime'da calisan sey artik EL2'deki kod ve o, UEFI'nin
+#  bellek haritasindan bagimsiz - EL2'de MMU kapali, adresler fiziksel.
+##
+
+[Defines]
+  INF_VERSION    = 0x0001001B
+  BASE_NAME      = B2LEl2Dxe
+  FILE_GUID      = 3F8A21D6-64B9-4C07-A15E-9D2B7E043C88
+  MODULE_TYPE    = DXE_DRIVER
+  VERSION_STRING = 1.0
+  ENTRY_POINT    = B2LEl2Entry
+
+[Sources]
+  B2LEl2Dxe.c
+  B2LEl2Payload.S
+
+[Packages]
+  MdePkg/MdePkg.dec
+  ArmPkg/ArmPkg.dec
+
+[LibraryClasses]
+  ArmSmcLib
+  BaseMemoryLib
+  CacheMaintenanceLib
+  DebugLib
+  UefiBootServicesTableLib
+  UefiDriverEntryPoint
+
+[Depex]
+  TRUE

@@ -1,0 +1,24 @@
+[Defines]
+  INF_VERSION                    = 0x00010005
+  BASE_NAME                      = B2LGoster
+  FILE_GUID                      = 8E41B7D2-5A63-4C09-B18F-2D7A6E5C4913
+  MODULE_TYPE                    = UEFI_APPLICATION
+  VERSION_STRING                 = 1.0
+  ENTRY_POINT                    = B2LGosterEntry
+
+[Sources]
+  B2LGoster.c
+
+[Packages]
+  MdePkg/MdePkg.dec
+  MdeModulePkg/MdeModulePkg.dec
+
+[LibraryClasses]
+  BaseMemoryLib
+  UefiApplicationEntryPoint
+  UefiBootServicesTableLib
+  UefiLib
+
+[Protocols]
+  gEfiGraphicsOutputProtocolGuid
+  gEfiHiiFontProtocolGuid

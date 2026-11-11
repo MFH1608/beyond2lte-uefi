@@ -15,12 +15,16 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parent
-CONFIG = ROOT / "mu-silicium-overlay/Resources/Configs/beyond2lte.toml"
-MEMORY_MAP = (
-    ROOT
-    / "mu-silicium-overlay/Platforms/Samsung/beyond2ltePkg/Library/MemoryMapLib/MemoryMapLib.c"
-)
-DSC = ROOT / "mu-silicium-overlay/Platforms/Samsung/beyond2ltePkg/beyond2lte.dsc"
+
+
+def device_files(device: str) -> tuple[Path, Path, Path]:
+    """Return (config, MemoryMapLib, DSC) paths for a supported device."""
+    base = ROOT / "mu-silicium-overlay" / "Platforms" / "Samsung" / f"{device}Pkg"
+    return (
+        ROOT / "mu-silicium-overlay" / "Resources" / "Configs" / f"{device}.toml",
+        base / "Library" / "MemoryMapLib" / "MemoryMapLib.c",
+        base / f"{device}.dsc",
+    )
 
 
 def fail(message: str) -> None:
@@ -45,7 +49,22 @@ def overlaps(first: tuple[int, int], second: tuple[int, int]) -> bool:
 
 
 def main() -> None:
-    with CONFIG.open("rb") as config_file:
+    import argparse
+
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument(
+        "--device",
+        default="beyond2lte",
+        help="Platform package / config basename (default: beyond2lte)",
+    )
+    args = parser.parse_args()
+
+    config_path, memory_map_path, dsc_path = device_files(args.device)
+    for path in (config_path, memory_map_path, dsc_path):
+        if not path.is_file():
+            fail(f"dosya yok: {path}")
+
+    with config_path.open("rb") as config_file:
         config = tomllib.load(config_file)
 
     fd_config = config.get("uefi_fd")
@@ -60,8 +79,8 @@ def main() -> None:
     if fd[1] == 0:
         fail("FD boyutu sifir")
 
-    memory_map = MEMORY_MAP.read_text(encoding="utf-8")
-    dsc = DSC.read_text(encoding="utf-8")
+    memory_map = memory_map_path.read_text(encoding="utf-8")
+    dsc = dsc_path.read_text(encoding="utf-8")
     mapped_fd = region(memory_map, "UEFI FD")
     stack = region(memory_map, "UEFI Stack")
     display = region(memory_map, "Display Reserved")

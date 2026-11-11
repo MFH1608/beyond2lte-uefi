@@ -1,12 +1,13 @@
 #!/usr/bin/env bash
 #
-# beyond2lte UEFI — tek komutluk derleme.
+# beyond2lte / beyond0lte UEFI — tek komutluk derleme.
 #
 # WSL'de calistir. Kendi konumunu bulur, hicbir yol elle yazilmaz:
-#   bash /mnt/c/.../UEFI_beyond2lte/yap.sh
+#   bash /mnt/c/.../UEFI_beyond2lte/yap.sh -d beyond0lte
 #
 # Kullanim:
-#   yap.sh                 DEBUG derle
+#   yap.sh                 DEBUG derle (varsayilan cihaz: beyond2lte)
+#   yap.sh -d beyond0lte   S10e (SM-G970F, 6/128) icin derle
 #   yap.sh -r RELEASE      RELEASE derle
 #   yap.sh --acpi          ACPI tablolarini derle + etkinlestir
 #   yap.sh --psci-hvc      deneysel: Windows PSCI'sini EL2 HVC koprusune yonlendir
@@ -19,10 +20,12 @@ set -euo pipefail
 PROJ="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 MU="${MU_SILICIUM:-$HOME/Mu-Silicium}"
 REL="DEBUG"; CLEAN=""; DO_ACPI=0; DO_TAR=0; PSCI_HVC=0; NO_TOUCH=0
+DEV="${B2L_DEVICE:-beyond2lte}"
 
 while [ $# -gt 0 ]; do
   case "$1" in
     -r|--release) REL="$2"; shift 2 ;;
+    -d|--device)  DEV="$2"; shift 2 ;;
     --acpi)  DO_ACPI=1; shift ;;
     --psci-hvc) PSCI_HVC=1; DO_ACPI=1; shift ;;
     --no-touch) NO_TOUCH=1; shift ;;
@@ -36,17 +39,23 @@ done
 say() { printf '\n\033[1;36m==> %s\033[0m\n' "$*"; }
 
 [ -d "$MU" ] || { echo "Mu-Silicium bulunamadi: $MU"; echo "MU_SILICIUM=... ile yol verebilirsin."; exit 1; }
+[ -d "$PROJ/mu-silicium-overlay/Platforms/Samsung/${DEV}Pkg" ] || {
+  echo "Cihaz paketi yok: mu-silicium-overlay/Platforms/Samsung/${DEV}Pkg"
+  echo "Desteklenen: beyond2lte (S10+), beyond0lte (S10e)"
+  exit 1
+}
 
 say "Proje: $PROJ"
 say "Mu-Silicium: $MU"
+say "Cihaz: $DEV"
 
 # BootShim, configteki FD_SIZE kadar veriyi FD_BASE'e kopyalar. UEFI FD
 # descriptoru veya CPU stack bu aralikla cakisirsa firmware kendi kodunu
 # ezebilir; derlemeden (ve dolayisiyla flashtan) once bunu kesin denetle.
 say "UEFI bellek yerlesimi dogrulaniyor"
-python3 "$PROJ/tools_uefi_layout_check.py"
+python3 "$PROJ/tools_uefi_layout_check.py" --device "$DEV"
 say "Windows korumali RAM denetleniyor"
-python3 "$PROJ/tools_reserved_memory_audit.py" --check
+python3 "$PROJ/tools_reserved_memory_audit.py" --device "$DEV" --check
 
 # ---------------------------------------------------------------- ACPI
 if [ "$DO_ACPI" = 1 ]; then
@@ -113,19 +122,19 @@ fi
 
 say "Overlay kopyalaniyor"
 cp -r "$PROJ/mu-silicium-overlay/." "$MU/"
-echo "  Platforms/Samsung/beyond2ltePkg"
+echo "  Platforms/Samsung/${DEV}Pkg"
 echo "  Silicon/Samsung/S5E9820Pkg"
 echo "  Silicon/Samsung/SamsungPkg/Drivers/UfsDxe/UfsDxe.inf  (upstream yamasi)"
-echo "  Resources/{Configs,DTBs}/beyond2lte.*"
+echo "  Resources/{Configs,DTBs}/${DEV}.*"
 
 # Tek-degiskenli kontrol: kaynak depoda surucu etkin kalir; yalnizca bu
 # derleme icin Mu-Silicium'a kopyalanan DXE.inc satiri kapatilir. Sonraki
 # normal yap.sh overlay'i yeniden kopyalayarak dokunmatigi geri acar.
 if [ "$NO_TOUCH" = 1 ]; then
-  DXE_INC="$MU/Platforms/Samsung/beyond2ltePkg/Include/DXE.inc"
-  sed -i 's|^  INF beyond2ltePkg/Drivers/B2LTouchDxe/B2LTouchDxe.inf$|  # INF beyond2ltePkg/Drivers/B2LTouchDxe/B2LTouchDxe.inf|' "$DXE_INC"
-  if grep -qx '  # INF beyond2ltePkg/Drivers/B2LTouchDxe/B2LTouchDxe.inf' "$DXE_INC" \
-     && ! grep -qx '  INF beyond2ltePkg/Drivers/B2LTouchDxe/B2LTouchDxe.inf' "$DXE_INC"; then
+  DXE_INC="$MU/Platforms/Samsung/${DEV}Pkg/Include/DXE.inc"
+  sed -i "s|^  INF .*Drivers/B2LTouchDxe/B2LTouchDxe\.inf\$|  # INF ${DEV}Pkg/Drivers/B2LTouchDxe/B2LTouchDxe.inf|" "$DXE_INC"
+  if grep -qx "  # INF ${DEV}Pkg/Drivers/B2LTouchDxe/B2LTouchDxe.inf" "$DXE_INC" \
+     && ! grep -qx "  INF ${DEV}Pkg/Drivers/B2LTouchDxe/B2LTouchDxe.inf" "$DXE_INC"; then
     echo "  B2LTouchDxe: KONTROL DERLEMESINDE KAPALI"
   else
     echo "HATA: B2LTouchDxe DXE.inc icinde kapatilamadi"
@@ -143,12 +152,12 @@ fi
 # PSCI cagrilarini HVC ile gondermesini sagladigi dar yolu kullanir.
 #
 if [ "$PSCI_HVC" = 1 ]; then
-  DXE_INC="$MU/Platforms/Samsung/beyond2ltePkg/Include/DXE.inc"
-  DSC="$MU/Platforms/Samsung/beyond2ltePkg/beyond2lte.dsc"
-  sed -i 's|^  # INF beyond2ltePkg/Drivers/B2LEl2Dxe/B2LEl2Dxe.inf$|  INF beyond2ltePkg/Drivers/B2LEl2Dxe/B2LEl2Dxe.inf|' "$DXE_INC"
-  sed -i 's|^  # beyond2ltePkg/Drivers/B2LEl2Dxe/B2LEl2Dxe.inf$|  beyond2ltePkg/Drivers/B2LEl2Dxe/B2LEl2Dxe.inf|' "$DSC"
-  if grep -qx '  INF beyond2ltePkg/Drivers/B2LEl2Dxe/B2LEl2Dxe.inf' "$DXE_INC" \
-     && grep -qx '  beyond2ltePkg/Drivers/B2LEl2Dxe/B2LEl2Dxe.inf' "$DSC"; then
+  DXE_INC="$MU/Platforms/Samsung/${DEV}Pkg/Include/DXE.inc"
+  DSC="$MU/Platforms/Samsung/${DEV}Pkg/${DEV}.dsc"
+  sed -i "s|^  # INF .*Drivers/B2LEl2Dxe/B2LEl2Dxe\.inf\$|  INF ${DEV}Pkg/Drivers/B2LEl2Dxe/B2LEl2Dxe.inf|" "$DXE_INC"
+  sed -i "s|^  # .*Drivers/B2LEl2Dxe/B2LEl2Dxe\.inf\$|  ${DEV}Pkg/Drivers/B2LEl2Dxe/B2LEl2Dxe.inf|" "$DSC"
+  if grep -qx "  INF ${DEV}Pkg/Drivers/B2LEl2Dxe/B2LEl2Dxe.inf" "$DXE_INC" \
+     && grep -qx "  ${DEV}Pkg/Drivers/B2LEl2Dxe/B2LEl2Dxe.inf" "$DSC"; then
     echo "  B2LEl2Dxe: HVC koprusu DERLEME VE FV'DE"
   else
     echo "HATA: B2LEl2Dxe DSC/DXE.inc icinde etkinlestirilemedi"
@@ -237,7 +246,7 @@ fi
 # $MU bir git deposu degil, orada degistirmek serbest. Depo temiz kaliyor.
 #
 if [ "$DO_ACPI" = 1 ]; then
-  INC="$MU/Platforms/Samsung/beyond2ltePkg/Include/ACPI.inc"
+  INC="$MU/Platforms/Samsung/${DEV}Pkg/Include/ACPI.inc"
   sed -i 's|^#\(FILE FREEFORM = 7E374E25\)|\1|; s|^#\(    SECTION \)|\1|; s|^#\(}\)|\1|' "$INC"
   echo "  ACPI.inc etkinlestirildi ($(grep -c '^    SECTION RAW' "$INC") tablo)"
 fi
@@ -248,28 +257,28 @@ cd "$MU"
 [ -d .venv ] && source .venv/bin/activate || true
 
 # Eski ciktiyi sil ki "yeni uretildi mi" sorusu belirsiz kalmasin
-rm -f "$MU"/Mu-beyond2lte*.img "$MU"/uefi-boot.tar
+rm -f "$MU"/Mu-${DEV}*.img "$MU"/uefi-boot.tar
 
 set +e
-python3 build_uefi.py -d beyond2lte -r "$REL" $CLEAN
+python3 build_uefi.py -d "$DEV" -r "$REL" $CLEAN
 RC=$?
 set -e
 if [ $RC -ne 0 ]; then
   echo
   echo "DERLEME BASARISIZ (cikis kodu $RC). Cikti uretilmedi."
-  echo "Ayrintili log: $MU/Build/BUILDLOG_beyond2ltePkg.txt"
+  echo "Ayrintili log: $MU/Build/BUILDLOG_${DEV}Pkg.txt"
   exit $RC
 fi
 
 # ---------------------------------------------------------------- rapor
-# build_uefi.py model son ekiyle "Mu-beyond2lte-0.img" de uretebiliyor,
+# build_uefi.py model son ekiyle "Mu-${DEV}-0.img" de uretebiliyor,
 # o yuzden isme sabitlemiyoruz: en yeni eslesmeyi aliyoruz.
-IMG="$(ls -t "$MU"/Mu-beyond2lte*.img 2>/dev/null | head -1)"
+IMG="$(ls -t "$MU"/Mu-${DEV}*.img 2>/dev/null | head -1)"
 say "Sonuc"
 if [ -n "$IMG" ] && [ -f "$IMG" ]; then
   echo "Uretilen imaj: $(basename "$IMG")"
   ls -lh "$IMG"
-  RPT="$MU/Build/beyond2ltePkg/${REL}_CLANGPDB/BUILD_REPORT.TXT"
+  RPT="$MU/Build/${DEV}Pkg/${REL}_CLANGPDB/BUILD_REPORT.TXT"
   if [ -f "$RPT" ]; then
     echo "--- FV kullanimi:"
     grep -A6 -i "FV Space Information" "$RPT" | head -12 || true
@@ -302,23 +311,23 @@ if [ -n "$IMG" ] && [ -f "$IMG" ]; then
   fi
 
   if [ -n "$DESK" ]; then
-    mkdir -p "$DESK/beyond2lte-flash"
-    cp -f "$IMG" "$DESK/beyond2lte-flash/"
-    cp -f "$MU/uefi-boot.tar" "$DESK/beyond2lte-flash/"
+    mkdir -p "$DESK/${DEV}-flash"
+    cp -f "$IMG" "$DESK/${DEV}-flash/"
+    cp -f "$MU/uefi-boot.tar" "$DESK/${DEV}-flash/"
     if [ "$NO_TOUCH" = 1 ]; then
-      cp -f "$MU/uefi-boot.tar" "$DESK/beyond2lte-flash/uefi-boot-no-touch.tar"
+      cp -f "$MU/uefi-boot.tar" "$DESK/${DEV}-flash/uefi-boot-no-touch.tar"
       echo "  uefi-boot-no-touch.tar -> Odin, AP (dokunmatik DXE kapali kontrol)"
     fi
-    echo "Flash dosyalari: $DESK/beyond2lte-flash"
+    echo "Flash dosyalari: $DESK/${DEV}-flash"
     echo "  uefi-boot.tar        -> Odin, AP slotu  (Re-Partition ISARETSIZ)"
-    echo "  Mu-beyond2lte.img    -> heimdall flash --BOOT Mu-beyond2lte.img"
+    echo "  Mu-${DEV}.img    -> heimdall flash --BOOT Mu-${DEV}.img"
   else
     echo "Masaustu bulunamadi. OUTDIR=/mnt/c/... ile yol verebilirsin."
     echo "  $IMG"
     echo "  $MU/uefi-boot.tar"
   fi
 else
-  echo "Derleme gecti ama Mu-beyond2lte*.img bulunamadi."
+  echo "Derleme gecti ama Mu-${DEV}*.img bulunamadi."
   echo "Bulunanlar:"; ls -la "$MU"/*.img 2>/dev/null || echo "  hic .img yok"
   exit 1
 fi

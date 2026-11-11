@@ -1,0 +1,35 @@
+## @file
+#  ResetSystem kancasi - Windows'un sifirlama cagrisini yakalar.
+#
+#  MODULE_TYPE DXE_RUNTIME_DRIVER SART: kanca ExitBootServices'ten sonra
+#  calisacak, yani imaj runtime kod bolgesinde olmali ve SetVirtualAddressMap
+#  sirasinda yeniden konumlandirilmali. DXE_DRIVER olsaydi Windows onu coktan
+#  serbest birakmis olurdu ve ilk cagrida cop koda atlardik.
+##
+
+[Defines]
+  INF_VERSION    = 0x0001001B
+  BASE_NAME      = B2LResetHookDxe
+  FILE_GUID      = 9E2B7C41-5A63-4D18-B0E7-3C51A8D96F02
+  MODULE_TYPE    = DXE_RUNTIME_DRIVER
+  VERSION_STRING = 1.0
+  ENTRY_POINT    = B2LResetHookEntry
+
+[Sources]
+  B2LResetHookDxe.c
+
+[Packages]
+  MdePkg/MdePkg.dec
+
+[LibraryClasses]
+  DebugLib
+  UefiBootServicesTableLib
+  UefiDriverEntryPoint
+  UefiRuntimeLib
+  UefiRuntimeServicesTableLib
+
+[Guids]
+  gEfiEventVirtualAddressChangeGuid  ## CONSUMES ## Event
+
+[Depex]
+  TRUE

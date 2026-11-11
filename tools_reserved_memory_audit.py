@@ -18,11 +18,15 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parent
-DT_SOURCE = ROOT / "mu-silicium-overlay/Resources/DTBs/beyond2lte.dts"
-MEMORY_MAP = (
-    ROOT
-    / "mu-silicium-overlay/Platforms/Samsung/beyond2ltePkg/Library/MemoryMapLib/MemoryMapLib.c"
-)
+
+
+def device_files(device: str) -> tuple[Path, Path]:
+    """Return (DTB source, MemoryMapLib source) for a supported device."""
+    return (
+        ROOT / f"mu-silicium-overlay/Resources/DTBs/{device}.dts",
+        ROOT
+        / f"mu-silicium-overlay/Platforms/Samsung/{device}Pkg/Library/MemoryMapLib/MemoryMapLib.c",
+    )
 
 
 @dataclass
@@ -137,16 +141,28 @@ def is_covered(target: Region, reserved: list[Region]) -> bool:
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
+        "--device",
+        default="beyond2lte",
+        help="Platform package / config basename (default: beyond2lte)",
+    )
+    parser.add_argument(
         "--check",
         action="store_true",
         help="exit non-zero if a fixed DT reserved-memory region is exposed",
     )
     args = parser.parse_args()
 
-    fixed, dynamic = fixed_regions(parse_nodes(DT_SOURCE.read_text(encoding="utf-8")))
-    reserved = reserved_map_regions(MEMORY_MAP.read_text(encoding="utf-8"))
+    dt_source, memory_map = device_files(args.device)
+    for path in (dt_source, memory_map):
+        if not path.is_file():
+            print(f"HATA: dosya yok: {path}", file=sys.stderr)
+            raise SystemExit(1)
+
+    fixed, dynamic = fixed_regions(parse_nodes(dt_source.read_text(encoding="utf-8")))
+    reserved = reserved_map_regions(memory_map.read_text(encoding="utf-8"))
     missing = [region for region in fixed if not is_covered(region, reserved)]
 
+    print(f"Cihaz: {args.device}  (DTB: {dt_source.name})")
     print("DTB fixed reserved-memory -> UEFI EfiReservedMemoryType")
     for region in fixed:
         state = "KORUNDU" if region not in missing else "ACIK"

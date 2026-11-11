@@ -60,6 +60,11 @@ Yerleşen üç şey:
 Merkezi bir cihaz listesi **yok** — `build_uefi.py` `Platforms/` altında
 `<isim>Pkg` klasörünü glob'layıp `Resources/Configs/<isim>.toml`'u okuyor. Kayıt gerekmez.
 
+Overlay artık **iki cihaz** taşıyor: `beyond2lte` (S10+) ve `beyond0lte`
+(S10e). Cihaz seçimi `yap.sh -d <isim>` ile yapılır; `build_uefi.py`'ye
+doğrudan `-d beyond0lte` verilebilir. Farklar ve doğrulanacak noktalar:
+[`PORT_S10E.md`](PORT_S10E.md).
+
 ## 4. Derle
 
 ```bash

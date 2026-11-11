@@ -1,0 +1,32 @@
+## @file
+#  EbsTest - ExitBootServices sonrasi kalp atisi.
+#
+#  UEFI_APPLICATION: firmware volume'a gomulmuyor, ESP'den elle
+#  calistiriliyor. Boylece normal aciliş yolunu hic etkilemiyor - dosya
+#  esp/ icinde yoksa startup.nsh onu atlar ve Windows'a gecer.
+##
+
+[Defines]
+  INF_VERSION    = 0x0001001B
+  BASE_NAME      = EbsTest
+  FILE_GUID      = 7D41C6B8-2E95-4A07-9F63-18B4E0A2D5C1
+  MODULE_TYPE    = UEFI_APPLICATION
+  VERSION_STRING = 1.0
+  ENTRY_POINT    = UefiMain
+
+[Sources]
+  EbsTest.c
+
+[Packages]
+  MdePkg/MdePkg.dec
+  ArmPkg/ArmPkg.dec
+
+[LibraryClasses]
+  ArmLib
+  TimerLib
+  UefiApplicationEntryPoint
+  UefiBootServicesTableLib
+  UefiLib
+
+[Protocols]
+  gEfiGraphicsOutputProtocolGuid  ## CONSUMES

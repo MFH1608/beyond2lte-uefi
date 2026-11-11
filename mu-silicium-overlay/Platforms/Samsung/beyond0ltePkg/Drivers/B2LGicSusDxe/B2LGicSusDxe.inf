@@ -1,0 +1,26 @@
+[Defines]
+  INF_VERSION                    = 0x00010005
+  BASE_NAME                      = B2LGicSusDxe
+  FILE_GUID                      = 5A72E93C-1D46-4B80-A2F5-6C0E9B3D71A4
+  MODULE_TYPE                    = DXE_DRIVER
+  VERSION_STRING                 = 1.0
+  ENTRY_POINT                    = B2LGicSusEntry
+
+[Sources]
+  B2LGicSusDxe.c
+
+[Packages]
+  MdePkg/MdePkg.dec
+  MdeModulePkg/MdeModulePkg.dec
+
+[LibraryClasses]
+  BaseMemoryLib
+  DebugLib
+  UefiDriverEntryPoint
+  UefiBootServicesTableLib
+
+[Guids]
+  gEfiEventExitBootServicesGuid
+
+[Depex]
+  TRUE
