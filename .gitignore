@@ -12,6 +12,11 @@ stockfirmware/
 out/
 esp/*.EFI
 
+# Windows medyasi (tools_winboot.sh uretir). boot.wim yuzlerce MB, depoya girmez.
+esp/EFI/
+esp/boot/
+esp/sources/
+
 # macOS
 .DS_Store
 ._*
