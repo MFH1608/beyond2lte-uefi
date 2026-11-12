@@ -1068,6 +1068,100 @@ USB.ser: su=18 cf=1 ad=40 pm=7770 ev=12 > hijau
   `ConfigureEnableEndpoints` → mesin Standart-Request milik driver kelas
   berjalan. Ini fondasi yang diperlukan M2b (CDC-ACM).
 
+### 6.6 M2b: kelas gadget CDC-ACM (serial `/dev/ttyACM*`)
+
+Tujuan: dengan kabel ke PC, perangkat muncul sebagai **port serial** — Linux
+`/dev/ttyACM0` (driver `cdc_acm`), Windows `usbser`. Di layar self-test muncul
+tiga baris `USB.ser` berisi bukti enumerasi + lalu lintas data.
+
+#### Mengapa notification interrupt EP itu wajib
+
+Pilihan pertama kami adalah CDC-ACM **tanpa** notification interrupt endpoint
+(control interface tanpa endpoint) supaya tidak perlu menyentuh driver DWC3
+bersama. Itu **tidak bisa jalan**, dan bukan karena "mungkin": driver Linux
+`cdc_acm` menolaknya secara eksplisit. Bukti dari source kernel v6.14,
+`drivers/usb/class/cdc-acm.c`, `acm_probe()`:
+
+```c
+if (data_interface->cur_altsetting->desc.bNumEndpoints < 2 ||
+    control_interface->cur_altsetting->desc.bNumEndpoints == 0)
+        return -EINVAL;
+
+epctrl = &control_interface->cur_altsetting->endpoint[0].desc;
+```
+
+`acm_probe()` menolak perangkat yang control interface-nya tidak punya endpoint
+(`-EINVAL`), lalu **tanpa syarat** membaca `endpoint[0]`. Pemeriksaan ini ada
+sejak 2012, jadi berlaku untuk praktis semua kernel modern. **Tanpa interrupt
+notification endpoint, `/dev/ttyACM*` tidak akan pernah muncul.** Karena itu
+interrupt EP dipakai (keputusan dikonfirmasi user).
+
+#### Yang ditambahkan
+
+1. **Driver kelas `B2LUsbSerialDxe`** (di `beyond0ltePkg`) diubah dari
+   "satu interface tanpa endpoint" (M2a) menjadi **CDC-ACM dua interface**:
+   - `IF0` (comm, `02/02/01`): functional descriptor header, call management,
+     ACM, union + **notification interrupt IN `0x82`** (interval 10).
+   - `IF1` (data, `0x0A`): **bulk OUT `0x02`** + **bulk IN `0x81`**.
+   - `bDeviceClass = 0x02` (Communications). Blob config 67 byte.
+   - Request kelas: `SET/GET_LINE_CODING` (7 byte), `SET_CONTROL_LINE_STATE`,
+     `SEND_BREAK`. Request tak dikenal → STALL.
+   - Data: begitu `SET_CONFIGURATION` diterima, bulk OUT di-arm; setiap paket
+     yang masuk **di-echo** ke bulk IN. Penghitung `rx` (byte masuk), `tx`
+     (byte keluar), `lc` (`SET_LINE_CODING` diterima) dinaikkan.
+2. **Patch `UsbfnDwc3Dxe.c` (SamsungPkg, file upstream bersama)** lewat script
+   idempotent `tools_usbfn_intr_patch.py`, dipanggil `yap.sh` tiap build.
+   Driver bersama itu menolak semua endpoint non-Bulk (`EFI_UNSUPPORTED`),
+   jadi tanpa patch ini interrupt EP gagal dikonfigurasi. Patch hanya menambah
+   cabang interrupt → `DWC3_DEPCMD_TYPE_INTR`; **tidak** mengubah logika loop
+   maupun string. Alasan memakai script (bukan menyalin file utuh) sama dengan
+   `tools_ufs_patch.py`: file ini ~1000 baris upstream, salinan penuh akan
+   kehilangan perbaikan upstream dan cepat basi.
+
+#### Batasan `UsbfnDwc3Dxe` yang membentuk desain M2b
+
+`Dwc3ConfigureEnableEndpoints` **hanya** menelusuri `InterfaceInfoTable[0]`
+(tidak berubah, sengaja dibiarkan minimal). Karena itu `B2LUsbSerialDxe`
+menggabungkan **ketiga** endpoint ke satu "interface konfigurasi perangkat
+keras" sintetik (`mHwEndpointTable`, `NumEndpoints = 3`) supaya ketiganya
+dikonfigurasi dalam satu loop, sementara descriptor yang dikirim ke host tetap
+dua interface yang benar (`mConfigBlob`). `InterfaceInfoTable[0]` dan
+`ConfigDescriptor` wajib non-NULL.
+
+#### Perubahan tampilan self-test
+
+Baris `USB.ser` (yang di M2a hanya satu baris enumerasi) kini menjadi tiga:
+
+```
+USB.ser: s=<n> st=<status>            -> merah bila belum Stage DONE
+USB.ser: su=.. cf=.. ad=.. pm=.. ev=..  -> hijau bila cf=1
+USB.ser: rx=.. tx=.. lc=..              -> hijau bila rx/tx != 0
+```
+
+- `su` setup count, `cf` SET_CONFIGURATION (1 = host mengonfigurasi), `ad`
+  alamat USB (`DCFG`), `pm` jumlah iterasi pompa, `ev` jumlah bus event.
+- `rx`/`tx`/`lc` = lalu lintas bulk/line-coding (lihat di atas). Nol bila PC
+  belum mengirim data.
+
+#### Bundel flash (M2b)
+
+Kabel ke **PC**, Download Mode, Odin `AP = uefi-boot.tar`, **Re-Partition tidak
+dicentang**. Di PC, setelah boot: `modprobe cdc_acm`, `dmesg | grep cdc_acm`,
+`lsusb` (diharapkan `04e8:2143`), lalu `/dev/ttyACM*`. Uji echo:
+
+```
+stty -F /dev/ttyACM0 raw -echo
+cat /dev/ttyACM0 &
+echo HELLO > /dev/ttyACM0
+```
+
+Balasan `HELLO` = jalur data dua arah bekerja. Foto baris `USB.ser` sebagai
+bukti (`rx`/`tx` harus naik).
+
+#### Hasil di perangkat (M2b)
+
+(belum diuji)
+
 ---
 
 ## 7. Rollback

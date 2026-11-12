@@ -1,21 +1,33 @@
 /** @file
-  Exynos 9820 (beyond0lte) DWC3 device-mode sinif surucusu - M2a.
+  Exynos 9820 (beyond0lte) DWC3 device-mode CDC-ACM sinif surucusu - M2b.
 
-  Amac: EFI_USBFN_IO_PROTOCOL (UsbfnDwc3Dxe) uzerinde DURAN en kucuk USB
-  aygit yiginini kurup PC'de ENUMERASYONU kanitlamak. M2a'da sinif henuz
-  CDC-ACM degil: tek arayuz, uc nokta yok. Boylece kontrol-aktarim motoru ve
-  enumerasyon ayri ayri dogrulanir; CDC-ACM (M2b) sonra descriptor + sinif
-  istekleri eklenerek yapilir.
+  Amac: PC'de /dev/ttyACM* (Linux cdc_acm) veya usbser (Windows) olarak
+  gorunen bir seri aygit saglamak. Iki arayuzlu standart CDC-ACM yerlesimi:
+
+    IF0 (comm, 0x02/0x02/0x01) : header + call mgmt + ACM + union functional
+                                 descriptor'lari + bildirim interrupt IN (0x82)
+    IF1 (data, 0x0A)           : Bulk OUT (0x02) + Bulk IN (0x81)
+
+  Bildirim interrupt uc noktasi ZORUNLU: Linux cdc_acm acm_probe() kontrol
+  arayuzunde uc nokta yoksa -EINVAL doner (bkz. PORT_S10E.md 6.6).
 
   Sozlesme (bkz. UsbfnDwc3Dxe.c):
     - StartController: PHY + DWC3 core.
-    - ConfigureEnableEndpoints: EP0 + interface[0] Bulk uc noktalarini kurar
-      ve DCTL.RUN_STOP ile portu aktif eder. Bu surumde interface[0]'in
-      hicbir uc noktasi yok, yani yalnizca EP0.
+    - ConfigureEnableEndpoints: EP0 + arayuz uc noktalarini kurar ve
+      DCTL.RUN_STOP ile portu aktif eder. UsbfnDwc3Dxe YALNIZCA
+      InterfaceInfoTable[0]'i gezer; bu yuzden comm (interrupt bildirim) ve
+      data (bulk) uc noktalarinin HEPSI tek bir "donanim konfig" arayuzu
+      altinda toplanir (bkz. mHwEndpointTable).
     - EventHandler tekrar tekrar cagrilir; Setup paketleri burada gelir.
     - Surucu SET_ADDRESS'i kendisi yapar; SET_CONFIGURATION/SET_INTERFACE'i
       ise once tum non-control uc noktalari sifirlayip bize yollar. Standart
-      isteklerin geri kalani (GET_DESCRIPTOR, GET_STATUS, ...) BIZE gelir.
+      isteklerin geri kalani (GET_DESCRIPTOR, GET_STATUS, ...) ve sinif
+      istekleri (SET/GET_LINE_CODING, SET_CONTROL_LINE_STATE, SEND_BREAK)
+      BIZE gelir.
+
+  Bulk veri yolu: SET_CONFIGURATION sonrasi Bulk OUT'ta okuma kurulur; gelen
+  veri aynen Bulk IN'den geri yazilir (echo). Teshis ekraninda rx/tx/lc
+  sayaclari gorunur.
 
   Olaylar bir zamanlayici ile pompa edilir (TPL_CALLBACK). Self-test ana
   dongusu her karede Raise/RestoreTPL yapip bekleyen notify'lari isledigi
@@ -65,25 +77,85 @@
 //
 #define B2L_DWC3_DEVADDR(Dcfg)  (((Dcfg) >> 3) & 0x7F)
 
+//
+// ================= CDC-ACM (M2b) =================
+//
+// PC tarafinda Linux cdc_acm / Windows usbser'in tanimasi icin iki arayuzlu
+// standart CDC-ACM yerlesimi. Bildirim interrupt uc noktasi ZORUNLU: Linux
+// acm_probe() kontrol arayuzunde uc nokta yoksa -EINVAL ile reddeder.
+//
+#define B2L_USB_CDC_IF_COMM      0     // iletisim (kontrol) arayuzu
+#define B2L_USB_CDC_IF_DATA      1     // veri arayuzu
+#define B2L_USB_CDC_SUBCLASS_ACM 0x02
+#define B2L_USB_CDC_PROTO_AT     0x01
+
+#define B2L_USB_CLASS_COMM       0x02  // bInterfaceClass: Communications
+#define B2L_USB_CLASS_CDC_DATA   0x0A  // bInterfaceClass: CDC-Data
+
+#define B2L_USB_CDC_HEADER       0x00  // functional: header
+#define B2L_USB_CDC_CALL_MGMT    0x01  // functional: call management
+#define B2L_USB_CDC_ACM          0x02  // functional: ACM
+#define B2L_USB_CDC_UNION        0x06  // functional: union
+
+//
+// CDC sinif istekleri (bRequest). GET/SET_LINE_CODING 7 bayt; digerleri veri
+// asamasi olmadan gelir.
+//
+#define B2L_USB_CDC_SET_LINE_CODING         0x20
+#define B2L_USB_CDC_GET_LINE_CODING         0x21
+#define B2L_USB_CDC_SET_CONTROL_LINE_STATE  0x22
+#define B2L_USB_CDC_SEND_BREAK              0x23
+
+//
+// Mantiksal uc nokta numaralari (bEndpointAddress & 0x0F). EFI_USBFN_IO_PROTOCOL
+// Transfer() EndpointIndex olarak bunlari alir; surucu Phys = (index<<1)|dir
+// yapar. 0x82 (bildirim IN) ile 0x02 (bulk OUT) ayni numarayi paylasir ama
+// yonleri farkli oldugu icin farkli fiziksel uc noktalara duser.
+//
+#define B2L_USB_EP_DATA_IN       1     // 0x81 bulk IN
+#define B2L_USB_EP_DATA_OUT      2     // 0x02 bulk OUT
+
+//
+// Bulk (veri) tampon boyutu. Surucu RX'te TRB uzunlugunu MaxPacketSize'a
+// yuvarlar (HS'te 512); tamponu ona gore buyuk tutuyoruz.
+//
+#define B2L_USB_BULK_BUF_SIZE    1024
+
+//
+// CDC satir kodlamasi (7 bayt). Varsayilan 115200 8N1.
+//
+#pragma pack(1)
+typedef struct {
+  UINT32  DteRate;
+  UINT8   CharFormat;
+  UINT8   ParityType;
+  UINT8   DataBits;
+} B2L_USB_LINE_CODING;
+#pragma pack()
+
 STATIC EFI_USBFN_IO_PROTOCOL         *mFn;
 STATIC B2L_USB_SERIAL_DIAG_PROTOCOL   mDiagProtocol;
 STATIC EFI_GUID                       mDiagGuid = B2L_USB_SERIAL_DIAG_PROTOCOL_GUID;
 STATIC EFI_EVENT                      mTimer;
 STATIC VOID                          *mEp0Buffer;
+STATIC VOID                          *mBulkOutBuffer;
+STATIC VOID                          *mBulkInBuffer;
 STATIC BOOLEAN                        mConfigured;
+STATIC B2L_USB_LINE_CODING            mLineCoding = { 115200, 0, 0, 8 };
 
 STATIC CONST CHAR16  mManStr[]    = L"Mu-Silicium";
 STATIC CONST CHAR16  mProdStr[]   = L"Samsung Exynos Gadget";
 STATIC CONST CHAR16  mSerialStr[] = L"0123456789ABCDEF";
 
 //
-// Cihaz tanimlayici.
+// Cihaz tanimlayici. Sinif bilgisi arayuzlerde verilir; Linux cdc_acm arayuz
+// sinifina gore baglanir. DeviceClass = 0x02 (Communications).
 //
 STATIC CONST USB_DEVICE_DESCRIPTOR  mDeviceDescriptor = {
   18,                         // Length
   USB_DESC_TYPE_DEVICE,       // DescriptorType
   0x0200,                     // BcdUSB
-  0xFF,                       // DeviceClass (vendor-specific)
+  B2L_USB_CLASS_COMM,         // DeviceClass (Communications)
   0x00,                       // DeviceSubClass
   0x00,                       // DeviceProtocol
   64,                         // MaxPacketSize0
@@ -97,29 +169,93 @@ STATIC CONST USB_DEVICE_DESCRIPTOR  mDeviceDescriptor = {
 };
 
 //
-// Konfigurasyon blogu: 1 konfigurasyon + 1 arayuz (uc nokta yok). USB 2.0
-// FS/HS enumerasyonu icin yeterli; GET_DESCRIPTOR(CONFIG) bu blogu dondurur.
+// CDC functional descriptor'lari (CS_INTERFACE, 0x24).
 //
 #pragma pack(1)
 typedef struct {
-  USB_CONFIG_DESCRIPTOR     Config;
-  USB_INTERFACE_DESCRIPTOR  Interface;
+  UINT8   Length;
+  UINT8   DescriptorType;
+  UINT8   DescriptorSubType;
+  UINT16  BcdCDC;
+} B2L_USB_CDC_HEADER_DESC;
+
+typedef struct {
+  UINT8   Length;
+  UINT8   DescriptorType;
+  UINT8   DescriptorSubType;
+  UINT8   Capabilities;
+  UINT8   DataInterface;
+} B2L_USB_CDC_CALL_MGMT_DESC;
+
+typedef struct {
+  UINT8   Length;
+  UINT8   DescriptorType;
+  UINT8   DescriptorSubType;
+  UINT8   Capabilities;
+} B2L_USB_CDC_ACM_DESC;
+
+typedef struct {
+  UINT8   Length;
+  UINT8   DescriptorType;
+  UINT8   DescriptorSubType;
+  UINT8   MasterInterface;
+  UINT8   SlaveInterface;
+} B2L_USB_CDC_UNION_DESC;
+
+//
+// Konfigurasyon blogu: 1 konfigurasyon + 2 arayuz. GET_DESCRIPTOR(CONFIG) bu
+// blogu dondurur; ayni zamanda donanim kurulumu icin descriptor kaynagidir.
+//
+//   comm (IF0): header, call mgmt, ACM, union + bildirim interrupt IN (0x82)
+//   data (IF1): bulk OUT (0x02) + bulk IN (0x81)
+//
+typedef struct {
+  USB_CONFIG_DESCRIPTOR       Config;
+  USB_INTERFACE_DESCRIPTOR    CommInterface;
+  B2L_USB_CDC_HEADER_DESC     Header;
+  B2L_USB_CDC_CALL_MGMT_DESC  CallMgmt;
+  B2L_USB_CDC_ACM_DESC        Acm;
+  B2L_USB_CDC_UNION_DESC      Union;
+  USB_ENDPOINT_DESCRIPTOR     NotifyIn;
+  USB_INTERFACE_DESCRIPTOR    DataInterface;
+  USB_ENDPOINT_DESCRIPTOR     BulkOut;
+  USB_ENDPOINT_DESCRIPTOR     BulkIn;
 } B2L_USB_CONFIG_BLOB;
 #pragma pack()
 
 STATIC CONST B2L_USB_CONFIG_BLOB  mConfigBlob = {
-  { 9, USB_DESC_TYPE_CONFIG, sizeof (B2L_USB_CONFIG_BLOB), 1, 1, 0, 0x80, 0x32 },
-  { 9, USB_DESC_TYPE_INTERFACE, 0, 0, 0, 0xFF, 0x00, 0x00, 0 }
+  { 9, USB_DESC_TYPE_CONFIG, sizeof (B2L_USB_CONFIG_BLOB), 2, 1, 0, 0x80, 0x32 },
+  { 9, USB_DESC_TYPE_INTERFACE, B2L_USB_CDC_IF_COMM, 0, 1,
+    B2L_USB_CLASS_COMM, B2L_USB_CDC_SUBCLASS_ACM, B2L_USB_CDC_PROTO_AT, 0 },
+  { 5, USB_DESC_TYPE_CS_INTERFACE, B2L_USB_CDC_HEADER, 0x0110 },
+  { 5, USB_DESC_TYPE_CS_INTERFACE, B2L_USB_CDC_CALL_MGMT, 0x00, B2L_USB_CDC_IF_DATA },
+  { 4, USB_DESC_TYPE_CS_INTERFACE, B2L_USB_CDC_ACM, 0x02 },
+  { 5, USB_DESC_TYPE_CS_INTERFACE, B2L_USB_CDC_UNION, B2L_USB_CDC_IF_COMM, B2L_USB_CDC_IF_DATA },
+  { 7, USB_DESC_TYPE_ENDPOINT, 0x82, USB_ENDPOINT_INTERRUPT, 64, 10 },
+  { 9, USB_DESC_TYPE_INTERFACE, B2L_USB_CDC_IF_DATA, 0, 2,
+    B2L_USB_CLASS_CDC_DATA, 0x00, 0x00, 0 },
+  { 7, USB_DESC_TYPE_ENDPOINT, 0x02, USB_ENDPOINT_BULK, 64, 0 },
+  { 7, USB_DESC_TYPE_ENDPOINT, 0x81, USB_ENDPOINT_BULK, 64, 0 }
 };
 
 //
-// ConfigureEnableEndpoints'in bekledigi yerlesim. Surucu yalnizca
-// InterfaceInfoTable[0]'i kullanir; uc nokta listesi bu yuzden bos.
+// Donanim konfig yerlesimi. UsbfnDwc3Dxe YALNIZCA InterfaceInfoTable[0]'i
+// gezdigi icin comm (bildirim interrupt) + data (bulk) uc noktalarinin HEPSI
+// burada toplanir. mHwInterfaceDesc sentetiktir; surucu ondan yalnizca
+// NumEndpoints alanini okur, host'a gonderilen descriptor'lar mConfigBlob'da.
 //
-STATIC USB_ENDPOINT_DESCRIPTOR  *mEndpointTable[1]   = { NULL };
+STATIC USB_ENDPOINT_DESCRIPTOR  *mHwEndpointTable[3] = {
+  (USB_ENDPOINT_DESCRIPTOR *)&mConfigBlob.NotifyIn,
+  (USB_ENDPOINT_DESCRIPTOR *)&mConfigBlob.BulkOut,
+  (USB_ENDPOINT_DESCRIPTOR *)&mConfigBlob.BulkIn
+};
+STATIC USB_INTERFACE_DESCRIPTOR  mHwInterfaceDesc = {
+  9, USB_DESC_TYPE_INTERFACE, B2L_USB_CDC_IF_COMM, 0, 3,
+  B2L_USB_CLASS_COMM, B2L_USB_CDC_SUBCLASS_ACM, B2L_USB_CDC_PROTO_AT, 0
+};
 STATIC EFI_USB_INTERFACE_INFO    mInterfaceInfo      = {
-  (USB_INTERFACE_DESCRIPTOR *)&mConfigBlob.Interface,
-  mEndpointTable
+  (USB_INTERFACE_DESCRIPTOR *)&mHwInterfaceDesc,
+  mHwEndpointTable
 };
 STATIC EFI_USB_INTERFACE_INFO   *mInterfaceInfoTable[1] = { &mInterfaceInfo };
 STATIC EFI_USB_CONFIG_INFO       mConfigInfo         = {
@@ -179,6 +315,31 @@ B2LUsbSendEp0 (
 }
 
 /**
+  EP0'dan veri al (data-out asamasi, ornegin SET_LINE_CODING). Surucu kendi
+  bounce tamponundan Buffer'a kopyalar; cagiran dogrudan hedef tamponu verir.
+**/
+STATIC
+VOID
+B2LUsbReceiveEp0 (
+  IN VOID   *Buffer,
+  IN UINTN   Length
+  )
+{
+  UINTN  Size = Length;
+
+  if (mFn->Transfer (
+            mFn,
+            0,
+            EfiUsbEndpointDirectionDeviceRx,
+            &Size,
+            Buffer
+            ) != EFI_SUCCESS)
+  {
+    mDiagProtocol.Diag.Stalls++;
+  }
+}
+
+/**
   GET_DESCRIPTOR(STRING) yaniti. Dizeler UTF-16LE olarak elle yazilir; boylece
   CHAR16 literal uzunluk/terminator sorunlari olmaz.
 **/
@@ -228,6 +389,115 @@ B2LUsbSendString (
 }
 
 /**
+  Bulk OUT'ta okuma kur. Gelen veri B2LUsbHandleBulkOut'ta yankilanir. Zaten
+  bir okuma varsa surucu EFI_NOT_READY doner; bu normaldir, yok sayilir.
+**/
+STATIC
+VOID
+B2LUsbStartBulkRead (
+  VOID
+  )
+{
+  UINTN  Size = B2L_USB_BULK_BUF_SIZE;
+
+  if ((mFn == NULL) || (mBulkOutBuffer == NULL)) {
+    return;
+  }
+
+  mFn->Transfer (
+         mFn,
+         B2L_USB_EP_DATA_OUT,
+         EfiUsbEndpointDirectionDeviceRx,
+         &Size,
+         mBulkOutBuffer
+         );
+}
+
+/**
+  Bulk OUT tamamlandi: gelen baytlari aynen Bulk IN'e geri yaz (echo). IN
+  mesgulse okumayi yeniden kur; host veriyi tekrar dener.
+**/
+STATIC
+VOID
+B2LUsbHandleBulkOut (
+  IN EFI_USBFN_TRANSFER_RESULT  *Result
+  )
+{
+  UINTN  Length;
+  UINTN  Size;
+
+  Length = Result->BytesTransferred;
+  if (Length > B2L_USB_BULK_BUF_SIZE) {
+    Length = B2L_USB_BULK_BUF_SIZE;
+  }
+
+  if ((Result->TransferStatus != UsbTransferStatusComplete) || (Length == 0)) {
+    //
+    // Iptal veya sifir uzunluk (SET_CONFIG/SET_INTERFACE sifirlamasi olabilir):
+    // yankilamadan yeniden oku.
+    //
+    if (mConfigured) {
+      B2LUsbStartBulkRead ();
+    }
+    return;
+  }
+
+  mDiagProtocol.Diag.RxBytes += (UINT32)Length;
+
+  CopyMem (mBulkInBuffer, mBulkOutBuffer, Length);
+
+  Size = Length;
+  if (mFn->Transfer (
+            mFn,
+            B2L_USB_EP_DATA_IN,
+            EfiUsbEndpointDirectionDeviceTx,
+            &Size,
+            mBulkInBuffer
+            ) == EFI_SUCCESS)
+  {
+    mDiagProtocol.Diag.TxBytes += (UINT32)Length;
+  } else if (mConfigured) {
+    //
+    // IN mesgul: okumayi yeniden kur, host tekrar denesin.
+    //
+    B2LUsbStartBulkRead ();
+  }
+}
+
+/**
+  CDC sinif istekleri (RequestType alani CLASS). SET/GET_LINE_CODING 7 bayt;
+  SET_CONTROL_LINE_STATE ve SEND_BREAK veri asamasi olmadan gelir.
+**/
+STATIC
+VOID
+B2LUsbHandleClassRequest (
+  IN EFI_USB_DEVICE_REQUEST  *Request
+  )
+{
+  switch (Request->Request) {
+    case B2L_USB_CDC_SET_LINE_CODING:
+      B2LUsbReceiveEp0 (&mLineCoding, sizeof (mLineCoding));
+      mDiagProtocol.Diag.LineCodings++;
+      return;
+
+    case B2L_USB_CDC_GET_LINE_CODING:
+      B2LUsbSendEp0 (&mLineCoding, sizeof (mLineCoding));
+      return;
+
+    case B2L_USB_CDC_SET_CONTROL_LINE_STATE:
+    case B2L_USB_CDC_SEND_BREAK:
+      //
+      // Veri asamasi yok; durum asamasi donanim tarafindan tamamlanir.
+      //
+      return;
+
+    default:
+      B2LUsbStallEp0 (Request);
+      return;
+  }
+}
+
+/**
   Setup paketi isle. Surucunun kendisi SET_ADDRESS'i yaptigi icin burada
   yalnizca gercek standart istekler + (M2b'de) sinif istekleri gelir.
 **/
@@ -245,9 +515,14 @@ B2LUsbHandleSetup (
   mDiagProtocol.Diag.LastBMRequestType = Request->RequestType;
   mDiagProtocol.Diag.LastValue         = Request->Value;
 
+  if ((Request->RequestType & (0x03U << 5)) == USB_REQ_TYPE_CLASS) {
+    B2LUsbHandleClassRequest (Request);
+    return;
+  }
+
   if ((Request->RequestType & (0x03U << 5)) != USB_REQ_TYPE_STANDARD) {
     //
-    // M2a'da sinif istegi yok; bilinmeyeni STALL et.
+    // Vendor/rezerve istekleri desteklemiyoruz.
     //
     B2LUsbStallEp0 (Request);
     return;
@@ -306,10 +581,23 @@ B2LUsbHandleSetup (
       mDiagProtocol.Diag.Configured = mConfigured ? 1 : 0;
       //
       // Veri asamasi yok; durum asamasi donanim tarafindan tamamlanir.
+      // Konfigurasyon secildi: bulk OUT'ta okumayi baslat.
       //
+      if (mConfigured) {
+        B2LUsbStartBulkRead ();
+      }
       return;
 
     case USB_REQ_SET_INTERFACE:
+      //
+      // Host data arayuzunu (alt ayar 0) secer. SET_CONFIGURATION/SET_INTERFACE
+      // oncesi surucu non-control uc noktalari sifirlar; okumayi yeniden kur.
+      //
+      if (mConfigured) {
+        B2LUsbStartBulkRead ();
+      }
+      return;
+
     case USB_REQ_SET_FEATURE:
     case USB_REQ_CLEAR_FEATURE:
       return;
@@ -364,10 +652,21 @@ B2LUsbPump (
 
       case EfiUsbMsgEndpointStatusChangedTx:
         mDiagProtocol.Diag.TxDone++;
+        if (Payload.utr.EndpointIndex == B2L_USB_EP_DATA_IN) {
+          //
+          // Echo gonderildi: siradaki okumayi kur.
+          //
+          if (mConfigured) {
+            B2LUsbStartBulkRead ();
+          }
+        }
         break;
 
       case EfiUsbMsgEndpointStatusChangedRx:
         mDiagProtocol.Diag.RxDone++;
+        if (Payload.utr.EndpointIndex == B2L_USB_EP_DATA_OUT) {
+          B2LUsbHandleBulkOut (&Payload.utr);
+        }
         break;
 
       case EfiUsbMsgBusEventReset:
@@ -469,6 +768,20 @@ B2LUsbSerialEntry (
   mDiagProtocol.Diag.EntryStatus  = (UINT64)(UINTN)Status;
   if (EFI_ERROR (Status) || (mEp0Buffer == NULL)) {
     return Status;
+  }
+
+  //
+  // 4b) CDC-ACM bulk (veri) tamponlari. EP0 gibi AllocateTransferBuffer ile
+  //     alinirlar (DMA uyumlu). Echo bu iki tampon arasinda yapilir.
+  //
+  mBulkOutBuffer = NULL;
+  mBulkInBuffer  = NULL;
+  if (EFI_ERROR (mFn->AllocateTransferBuffer (mFn, B2L_USB_BULK_BUF_SIZE, &mBulkOutBuffer)) ||
+      EFI_ERROR (mFn->AllocateTransferBuffer (mFn, B2L_USB_BULK_BUF_SIZE, &mBulkInBuffer)) ||
+      (mBulkOutBuffer == NULL) || (mBulkInBuffer == NULL))
+  {
+    mDiagProtocol.Diag.BufferStatus = (UINT64)(UINTN)EFI_OUT_OF_RESOURCES;
+    return EFI_OUT_OF_RESOURCES;
   }
 
   //

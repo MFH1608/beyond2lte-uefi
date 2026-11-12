@@ -127,6 +127,15 @@ echo "  Silicon/Samsung/S5E9820Pkg"
 echo "  Silicon/Samsung/SamsungPkg/Drivers/UfsDxe/UfsDxe.inf  (upstream yamasi)"
 echo "  Resources/{Configs,DTBs}/${DEV}.*"
 
+#
+# UsbfnDwc3Dxe.c intr yamasi - CDC-ACM bildirim uc noktasi.
+#
+# bkz. tools_usbfn_intr_patch.py basi. Kurtarma: overlay UsbfnDwc3Dxe.c'yi
+# kopyalamadigi icin yama dogrudan $MU dosyasina uygulanir; script idempotent
+# (imza varsa dokunmaz), geri almak icin $MU icinde git checkout yeter.
+#
+python3 "$PROJ/tools_usbfn_intr_patch.py" "$MU"
+
 # Tek-degiskenli kontrol: kaynak depoda surucu etkin kalir; yalnizca bu
 # derleme icin Mu-Silicium'a kopyalanan DXE.inc satiri kapatilir. Sonraki
 # normal yap.sh overlay'i yeniden kopyalayarak dokunmatigi geri acar.

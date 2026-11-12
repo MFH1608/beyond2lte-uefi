@@ -133,6 +133,9 @@ typedef struct {
   UINT32  TxDone;
   UINT32  RxDone;
   UINT32  BusEvents;
+  UINT32  RxBytes;
+  UINT32  TxBytes;
+  UINT32  LineCodings;
   UINT32  LastBRequest;
   UINT32  LastBMRequestType;
   UINT32  LastValue;
@@ -958,6 +961,19 @@ B2LSelfTest (
           UsbDiag->Diag.Addr,
           UsbDiag->Diag.Pumps,
           UsbDiag->Diag.BusEvents
+          );
+        //
+        // CDC-ACM veri yolu: rx = host'tan okunan bayt, tx = geri yazilan
+        // (echo) bayt, lc = SET_LINE_CODING sayisi. PC'de /dev/ttyACM* acilip
+        // veri gonderilince rx/tx artar.
+        //
+        B2LUiPrint (
+          ((UsbDiag->Diag.RxBytes != 0) || (UsbDiag->Diag.TxBytes != 0))
+            ? B2L_UI_YESIL : B2L_UI_GRI,
+          L"USB.ser: rx=%u tx=%u lc=%u",
+          UsbDiag->Diag.RxBytes,
+          UsbDiag->Diag.TxBytes,
+          UsbDiag->Diag.LineCodings
           );
       }
     } else {

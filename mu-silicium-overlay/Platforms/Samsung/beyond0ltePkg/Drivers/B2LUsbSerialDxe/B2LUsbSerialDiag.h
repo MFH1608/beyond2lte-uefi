@@ -76,6 +76,15 @@ typedef struct {
   UINT32  BusEvents;    // reset/attach/detach olayi
 
   //
+  // CDC-ACM bulk (veri) aktarimi. M2b'de eklenir: rx = host'tan okunan veri
+  // bayti, tx = host'a geri yazilan (echo) bayt, lc = SET_LINE_CODING sayisi.
+  // Bunlar donanim olmadan da (PC bagli degilken) sifir kalir.
+  //
+  UINT32  RxBytes;
+  UINT32  TxBytes;
+  UINT32  LineCodings;
+
+  //
   // Son setup paketi (hangi istegin geldigini gormek icin).
   //
   UINT32  LastBRequest;
