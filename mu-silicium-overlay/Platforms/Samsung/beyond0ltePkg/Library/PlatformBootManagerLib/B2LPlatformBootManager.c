@@ -796,6 +796,21 @@ B2LSelfTest (
     return;
   }
 
+  //
+  // ConIn "lazy" moddadir: ILK ReadKeyStroke cagrisi ConnectConIn olayini
+  // tetikler (bkz. ConSplitter.c) ve konsol kendini yeniden cizerken
+  // framebuffer'i SILEBILIR. Bu, canli dongudeki ilk turda - yani statik blok
+  // (baslik + bilgi) cizildikten SONRA - oldugu icin ekranin USTU bos
+  // kaliyordu (bkz. PORT_S10E.md 6.5: "ust bos"). Tetiklemeyi CIZIMDEN ONCE
+  // yapiyoruz: sahte ReadKeyStroke + TPL pompası konsolun yeniden cizimini
+  // bitirsin, ardindan temizleyip uzerine yazariz. Bayrak tek seferlik
+  // oldugu icin canli dongude bir daha tetiklenmez.
+  //
+  if ((gST->ConIn != NULL) && (gST->ConIn->ReadKeyStroke != NULL)) {
+    gST->ConIn->ReadKeyStroke (gST->ConIn, &Key);
+    gBS->RestoreTPL (gBS->RaiseTPL (TPL_HIGH_LEVEL));
+  }
+
   B2LUiClearFrom (0);
   mUiY = B2L_UI_KENAR;
 

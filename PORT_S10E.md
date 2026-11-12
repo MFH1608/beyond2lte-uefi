@@ -1158,9 +1158,66 @@ echo HELLO > /dev/ttyACM0
 Balasan `HELLO` = jalur data dua arah bekerja. Foto baris `USB.ser` sebagai
 bukti (`rx`/`tx` harus naik).
 
-#### Hasil di perangkat (M2b)
+##### Verifikasi: SUKSES (M2b selesai)
 
-(belum diuji)
+Dengan kabel ke PC:
+
+Sisi Linux (laptop):
+
+```
+$ lsusb | grep 04e8
+Bus 001 Device 036: ID 04e8:2143 Samsung Electronics Co., Ltd Samsung Exynos Gadget
+
+$ sudo dmesg | grep -i cdc_acm
+cdc_acm 1-4:1.0: ttyACM0: USB ACM device
+usbcore: registered new interface driver cdc_acm
+
+$ ls /dev/ttyACM*
+crw-rw---- 166,0 root /dev/ttyACM0
+
+$ echo HELLO > /dev/ttyACM0   # cat /dev/ttyACM0 di terminal lain
+HELLO
+```
+
+Sisi ponsel (layar self-test):
+
+```
+USB.ser: su=19 cf=1 ad=42 pm=35701 ev=6
+USB.ser: rx=24 tx=24 lc=1
+```
+
+- `usbcore` + `cdc_acm` bind ke interface data (`1-4:1.0`/`1.1`) → `/dev/ttyACM0`
+  muncul. VID:PID `04e8:2143`.
+- Echo dua arah: `HELLO` dikirim dari PC kembali utuh. Di layar **`rx=24
+  tx=24`** (24 byte masuk, 24 byte di-echo) dan **`lc=1`** (satu
+  `SET_LINE_CODING` dari `stty`).
+- **Kesimpulan M2b:** jalur **device/gadget CDC-ACM berfungsi penuh** —
+  enumerasi, kontrol (kelas), dan data bulk dua arah. Ini juga mengonfirmasi
+  patch interrupt EP (`tools_usbfn_intr_patch.py`) berhasil: tanpa itu Linux
+  `acm_probe()` akan `-EINVAL` dan `/dev/ttyACM0` tak akan ada.
+
+#### Perbaikan tampilan: "bagian atas blank"
+
+Gejala: baris paling atas layar self-test kosong dan blok statis (banner
+"S10e … UEFI SELF TEST" + info display/RAM/memmap/USB) **hilang**, digantikan
+satu baris kecil firmware `Connect ConIn in first ReadKeyStoke in Lazy ConIn
+mode.`; hanya blok hidup (`Key`, `USB.ser`) yang terlihat.
+
+Sebab: ConIn berjalan dalam **mode lazy** (PcdConInConnectOnDemand). Panggilan
+`ReadKeyStroke` **pertama** menandai `ConnectConInEvent` (bukti source:
+`MdeModulePkg/Universal/Console/ConSplitterDxe/ConSplitter.c`, pesan itu
+dibuat tepat sebelum `gBS->SignalEvent`). Notify-nya baru dijalankan saat TPL
+diturunkan — yaitu di **iterasi pertama loop canli**, yang sudah **setelah**
+blok statis digambar. Saat konsol menangani connect itu, ia menggambar ulang
+teks (dan membersihkan framebuffer), sehingga blok statis kami terhapus. Blok
+kanan hidup tetap muncul karena digambar ulang setiap frame.
+
+Perbaikan: pemicu lazy-connect **dijalankan lebih dulu, sebelum menggambar** —
+satu `ReadKeyStroke` kosong + satu pompa TPL (`RestoreTPL(RaiseTPL
+(TPL_HIGH_LEVEL))`) menyelesaikan penggambaran ulang konsol; setelah itu layar
+dibersihkan dan blok statis digambar di atasnya. Karena flag-nya sekali-jalan
+(`mConInIsConnect`), loop canli tidak memicunya lagi. Perubahan hanya di
+`B2LPlatformBootManager.c`.
 
 ---
 
