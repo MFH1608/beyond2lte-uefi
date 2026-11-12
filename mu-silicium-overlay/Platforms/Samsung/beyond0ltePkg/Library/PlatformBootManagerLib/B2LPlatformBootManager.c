@@ -737,28 +737,18 @@ B2LSelfTest (
 {
   EFI_STATUS                     Status;
   EFI_ABSOLUTE_POINTER_PROTOCOL  *Abs;
-  EFI_ABSOLUTE_POINTER_STATE     TouchState;
   EFI_INPUT_KEY                  Key;
   B2L_TOUCH_DIAG_PROTOCOL        *TouchDiag;
   BOOLEAN                        HasTouch;
-  BOOLEAN                        DiagOk;
   BOOLEAN                        Exit;
-  EFI_STATUS                     TouchStatus;
-  UINT32                         TouchPolls;
-  UINT32                         TouchHits;
   UINT32                         DynTop;
   B2L_USB_SERIAL_DIAG_PROTOCOL   *UsbDiag;
   BOOLEAN                        UsbDiagOk;
   CHAR16                         LastKey[56];
-  CHAR16                         LastTouch[80];
 
   HasTouch    = FALSE;
-  DiagOk      = FALSE;
   Exit        = FALSE;
   Abs         = NULL;
-  TouchStatus = EFI_NOT_READY;
-  TouchPolls  = 0;
-  TouchHits   = 0;
   TouchDiag   = NULL;
   DynTop      = 0;
   UsbDiag     = NULL;
@@ -789,7 +779,6 @@ B2LSelfTest (
   mUiY = B2L_UI_KENAR;
 
   UnicodeSPrint (LastKey, sizeof (LastKey), L"(not yet)");
-  UnicodeSPrint (LastTouch, sizeof (LastTouch), L"(not yet)");
 
   B2LUiPrint (B2L_UI_BEYAZ, L"--------------------------------------------------------------");
   B2LUiPrint (B2L_UI_BEYAZ, L" S10e (beyond0lte) - UEFI SELF TEST");
@@ -805,14 +794,15 @@ B2LSelfTest (
   B2LDrawUsbDev ();
 
   //
-  // Surucu teshis protokolu. Once bunu arariz: hem entry asamasini gosterir
-  // hem de kurdugu AbsolutePointer protokolunun isaretcisini tasir. UI
-  // ConSplitter'in toplu (agregat) protokolu yerine DOGRUDAN bizim
-  // protokolla konusmak zorunda: ConSplitter mode'u 0x10000 (65536) ve
-  // bizim surucumuz oraya bagli degil.
+  // Dokunma teshis protokolu. Ekranda artik DOKUNMA SATIRI GOSTERILMIYOR
+  // (yer kapliyordu, bkz. PORT_S10E.md); bu blok yalnizca gercek
+  // AbsolutePointer protokolunu elde etmek icin duruyor. UI ConSplitter'in
+  // toplu (agregat) protokolu yerine DOGRUDAN bizim protokolla konusmak
+  // zorunda: ConSplitter mode'u 0x10000 (65536) ve bizim surucumuz oraya
+  // bagli degil.
   //
   // Signature/Size, iki modulde elle tutulan yerlesimin ayni oldugunu
-  // dogrular; tutmazsa teshis alanlari okunmaz.
+  // dogrular; tutmazsa teshis alani okunmaz.
   //
   Status = gBS->LocateProtocol (
                   (EFI_GUID *)(VOID *)&mB2LTouchDiagGuid,
@@ -822,14 +812,11 @@ B2LSelfTest (
   if (!EFI_ERROR (Status) &&
       (TouchDiag != NULL) &&
       (TouchDiag->Diag.Signature == B2L_TOUCH_DIAG_SIGNATURE) &&
-      (TouchDiag->Diag.Size == (UINT32)sizeof (B2L_TOUCH_DIAG)))
+      (TouchDiag->Diag.Size == (UINT32)sizeof (B2L_TOUCH_DIAG)) &&
+      (TouchDiag->Diag.AbsPointer != 0))
   {
-    DiagOk = TRUE;
-
-    if (TouchDiag->Diag.AbsPointer != 0) {
-      Abs      = (EFI_ABSOLUTE_POINTER_PROTOCOL *)(UINTN)TouchDiag->Diag.AbsPointer;
-      HasTouch = TRUE;
-    }
+    Abs      = (EFI_ABSOLUTE_POINTER_PROTOCOL *)(UINTN)TouchDiag->Diag.AbsPointer;
+    HasTouch = TRUE;
   } else {
     TouchDiag = NULL;
   }
@@ -872,7 +859,6 @@ B2LSelfTest (
 
   B2LUiPrint (B2L_UI_BEYAZ, L"--------------------------------------------------------------");
   B2LUiPrint (B2L_UI_GRI,   L"VolUp/Down=Up/Down Bixby=Enter Bixby+Vol=Exit");
-  B2LUiPrint (B2L_UI_GRI,   L"Touch.dx hit and Touch.ev co should grow");
   B2LUiPrint (B2L_UI_BEYAZ, L"--------------------------------------------------------------");
 
   //
@@ -884,8 +870,9 @@ B2LSelfTest (
   for (;;) {
     //
     // Bu dongu kendi govdesinde gBS->Stall ile bekledigi icin TPL_CALLBACK
-    // zamanlayicilari (ornegin touch yoklama) kendiliginden islemez.
-    // Raise/RestoreTPL cifti bekleyen tum notify fonksiyonlarini pompalar.
+    // zamanlayicilari (ornegin B2LUsbSerialDxe'nin USB olay pompasi)
+    // kendiliginden islemez. Raise/RestoreTPL cifti bekleyen tum notify
+    // fonksiyonlarini pompalar.
     //
     gBS->RestoreTPL (gBS->RaiseTPL (TPL_HIGH_LEVEL));
 
@@ -923,162 +910,11 @@ B2LSelfTest (
       }
     }
 
-    if (HasTouch) {
-      //
-      // Teshis: st=GetState sonucu, poll=kac kez cagrildi, hit=state donen
-      // cagri sayisi. st surekli NOT_READY ise denetleyici olay uretmiyor;
-      // poll artmiyorsa GetState hic cagrilmiyor demektir.
-      //
-      TouchPolls++;
-      TouchStatus = Abs->GetState (Abs, &TouchState);
-      if (!EFI_ERROR (TouchStatus)) {
-        TouchHits++;
-        UnicodeSPrint (
-          LastTouch,
-          sizeof (LastTouch),
-          L"X=%u Y=%u Z=%u btn=0x%x",
-          TouchState.CurrentX,
-          TouchState.CurrentY,
-          TouchState.CurrentZ,
-          TouchState.ActiveButtons
-          );
-      }
-    }
-
     //
-    // Teshis blogu. Her satir surucunun doldurdugu bir alani gosterir; amac
-    // tek flash'ta "I2C mi, guc mu, parser mi" ayrimini ekrandan okumak.
-    // Sozlesme (Signature/Size) tutmazsa blok hic cizilmez.
+    // Tus tanisi (dokunma satirlari kaldirildi: ekrani tasirip ust bilgi
+    // blogunu eziyordu, bkz. PORT_S10E.md 6.5).
     //
-    if (DiagOk) {
-      B2LUiPrint (
-        (TouchDiag->Diag.Stage == B2L_TOUCH_STAGE_DONE) ? B2L_UI_YESIL : B2L_UI_KIRMIZI,
-        L"Touch.ent: stage=%u st=%r",
-        TouchDiag->Diag.Stage,
-        (EFI_STATUS)(UINTN)TouchDiag->Diag.EntryStatus
-        );
-      B2LUiPrint (
-        B2L_UI_BEYAZ,
-        L"Touch.id : %02x %02x %02x %02x %02x",
-        TouchDiag->Diag.DeviceId[0],
-        TouchDiag->Diag.DeviceId[1],
-        TouchDiag->Diag.DeviceId[2],
-        TouchDiag->Diag.DeviceId[3],
-        TouchDiag->Diag.DeviceId[4]
-        );
-      B2LUiPrint (
-        B2L_UI_GRI,
-        L"Touch.id : iv=%02x bs=%02x rc=%u pc=%u",
-        TouchDiag->Diag.Integrity,
-        TouchDiag->Diag.BootStatus,
-        TouchDiag->Diag.ResetCalls,
-        TouchDiag->Diag.ProbeCalls
-        );
-      B2LUiPrint (
-        TouchDiag->Diag.BringUpOk ? B2L_UI_YESIL : B2L_UI_KIRMIZI,
-        L"Touch.fn : be=%02x%02x af=%02x%02x ok=%u",
-        TouchDiag->Diag.FnBefore[0],
-        TouchDiag->Diag.FnBefore[1],
-        TouchDiag->Diag.FnAfter[0],
-        TouchDiag->Diag.FnAfter[1],
-        TouchDiag->Diag.BringUpOk
-        );
-      B2LUiPrint (
-        TouchDiag->Diag.PowerOk ? B2L_UI_YESIL : B2L_UI_KIRMIZI,
-        L"Touch.pm : loc=%u set=%u%u pwr=%u",
-        TouchDiag->Diag.PmicLocate,
-        TouchDiag->Diag.LdoSetOk[0],
-        TouchDiag->Diag.LdoSetOk[1],
-        TouchDiag->Diag.PowerOk
-        );
-      B2LUiPrint (
-        B2L_UI_BEYAZ,
-        L"Touch.pm : io=%u av=%u uV",
-        TouchDiag->Diag.LdoUv[0],
-        TouchDiag->Diag.LdoUv[1]
-        );
-      B2LUiPrint (
-        (TouchDiag->Diag.LastStatus == 0) ? B2L_UI_YESIL : B2L_UI_KIRMIZI,
-        L"Touch.err: %r",
-        (EFI_STATUS)(UINTN)TouchDiag->Diag.LastStatus
-        );
-
-      //
-      // HSI2C ham durumu ve adres taramasi YALNIZCA bir hata olduysa
-      // basilir. Basarili durumda yer kaplamamali: canli dokunma satirlari
-      // ekranin altina sigmali.
-      //
-      if ((TouchDiag->Diag.LastStatus != 0) || (TouchDiag->Diag.ScanDone != 0)) {
-        B2LUiPrint (
-          B2L_UI_GRI,
-          L"Touch.di : int=%08x tr=%08x",
-          TouchDiag->Diag.IntStatus,
-          TouchDiag->Diag.TransStatus
-          );
-        B2LUiPrint (
-          B2L_UI_GRI,
-          L"Touch.sc : %08x %08x",
-          TouchDiag->Diag.ScanAck[0],
-          TouchDiag->Diag.ScanAck[1]
-          );
-        B2LUiPrint (
-          B2L_UI_GRI,
-          L"Touch.sc : %08x %08x",
-          TouchDiag->Diag.ScanAck[2],
-          TouchDiag->Diag.ScanAck[3]
-          );
-      }
-      B2LUiPrint (
-        B2L_UI_GRI,
-        L"Touch.ev : p=%u e=%u x=%u",
-        TouchDiag->Diag.Polls,
-        TouchDiag->Diag.Empty,
-        TouchDiag->Diag.Errors
-        );
-      B2LUiPrint (
-        B2L_UI_GRI,
-        L"Touch.ev : s=%u c=%u i=%u",
-        TouchDiag->Diag.StatusEvents,
-        TouchDiag->Diag.CoordEvents,
-        TouchDiag->Diag.Ignored
-        );
-      B2LUiPrint (
-        B2L_UI_GRI,
-        L"Touch.raw: %02x %02x %02x %02x %02x %02x %02x %02x",
-        TouchDiag->Diag.LastEvent[0],
-        TouchDiag->Diag.LastEvent[1],
-        TouchDiag->Diag.LastEvent[2],
-        TouchDiag->Diag.LastEvent[3],
-        TouchDiag->Diag.LastEvent[4],
-        TouchDiag->Diag.LastEvent[5],
-        TouchDiag->Diag.LastEvent[6],
-        TouchDiag->Diag.LastEvent[7]
-        );
-    } else {
-      B2LUiPrint (B2L_UI_KIRMIZI, L"Touch.diag: no protocol/layout");
-    }
-
-    if (HasTouch && (Abs->Mode != NULL)) {
-      B2LUiPrint (
-        B2L_UI_BEYAZ,
-        L"Touch.m : %u x %u",
-        (UINT32)Abs->Mode->AbsoluteMaxX,
-        (UINT32)Abs->Mode->AbsoluteMaxY
-        );
-    }
-
     B2LUiPrint (B2L_UI_BEYAZ, L"Key     : %s", LastKey);
-    B2LUiPrint (HasTouch ? B2L_UI_YESIL : B2L_UI_GRI, L"Touch   : %s", LastTouch);
-
-    if (HasTouch) {
-      B2LUiPrint (
-        EFI_ERROR (TouchStatus) ? B2L_UI_SARI : B2L_UI_YESIL,
-        L"Touch.dx: st=%r poll=%u hit=%u",
-        TouchStatus,
-        (UINT32)TouchPolls,
-        (UINT32)TouchHits
-        );
-    }
 
     //
     // USB device-mode: basarisizsa HANGI asama + o asamanin status'u; basarili

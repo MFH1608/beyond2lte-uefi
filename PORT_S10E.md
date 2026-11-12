@@ -973,13 +973,38 @@ Di PC, saat perangkat terhubung: `lsusb` harus menampilkan `04e8:2143`
 
 | Berkas | SHA-256 |
 | --- | --- |
-| `~/Downloads/beyond0lte-flash/uefi-boot.tar` | `f267064a81049e5fa27f5cd32b4ab80bf211345a11ea7da624f1c806e4edd44c` |
-| `~/Downloads/beyond0lte-flash/Mu-beyond0lte.img` | `1c5cb97d530faa8c44c558bbca205738c048a66525a863e47755b137d09a8f1a` |
+| `~/Downloads/beyond0lte-flash/uefi-boot.tar` | `d5358c15ac08123616a41e9519cfcba72fe4950a2020b6ff65ae5008f60a520e` |
+| `~/Downloads/beyond0lte-flash/Mu-beyond0lte.img` | `bfbf75181d46e228cefd1edb121d387b1fe8aa5a8f6c4d64f61ca7fa81eea618` |
+
+> **Catatan hash:** setiap build menyisipkan cap waktu, jadi SHA-256
+> `uefi-boot.tar`/`Mu-beyond0lte.img` **berubah tiap rebuild** meski sumbernya
+> sama. Angka di atas hanya berlaku untuk bundel di `~/Downloads` saat ini.
 
 Build: `YAP_RC=0`, **68 image**. `B2LUsbSerialDxe` (GUID
 `7C4B1E92-3A85-4D67-B0F2-9E5C8A1D4F30`) ada di `FVMAIN`; string `USB.ser` ada di
-`BdsDxe.efi`. `FVMAIN_COMPACT` terpakai `0xd2450` dari `0x400000` (naik ~`0x640`
+`BdsDxe.efi`. `FVMAIN_COMPACT` terpakai `0xd2138` dari `0x400000` (naik ~`0x320`
 dari M1) — masih sangat lega.
+
+#### Self-test: uji sentuh disembunyikan (layar muat)
+
+Layar self-test punya tinggi tetap (1080×2280, `B2L_UI_SATIR = 61` → ~37 baris).
+Sebelum ini isinya ~37–40 baris, jadi baris bawah terpotong dan blok informasi
+atas jadi tidak terbaca. Blok uji sentuh (`Touch.*`, 12–15 baris) **dihapus dari
+layar** supaya semuanya muat.
+
+Yang berubah di `B2LPlatformBootManager.c`:
+
+- Semua `B2LUiPrint (… L"Touch.*" …)` di loop hidup dihapus; `Abs->GetState`
+  polling dan penghitung `TouchPolls/TouchHits/LastTouch` ikut dihapus.
+- Baris petunjuk statis `Touch.dx hit and Touch.ev co should grow` dihapus.
+- **Driver sentuh tidak diubah** dan tetap ditenagai: protokol teshis
+  (`B2L_TOUCH_DIAG_PROTOCOL_GUID`) masih dicari hanya untuk mengambil pointer
+  `AbsolutePointer` yang asli, lalu `Abs->Reset(TRUE)` tetap dijalankan.
+  Jadi sentuh tetap berfungsi sebagai perangkat input; yang hilang hanya
+  tampilannya di layar.
+
+Sisa blok hidup kini cuma **2 baris** (`Key` dan `USB.ser`), jadi layar penuh
+terbaca (informasi Display/RAM/Memmap/USB di atas tidak lagi terpotong).
 
 ---
 
