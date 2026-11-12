@@ -1,0 +1,35 @@
+[Defines]
+  INF_VERSION                    = 0x00010005
+  BASE_NAME                      = B2LUsbSerialDxe
+  FILE_GUID                      = 7C4B1E92-3A85-4D67-B0F2-9E5C8A1D4F30
+  MODULE_TYPE                    = DXE_DRIVER
+  VERSION_STRING                 = 1.0
+  ENTRY_POINT                    = B2LUsbSerialEntry
+
+#
+# Exynos 9820 (beyond0lte) DWC3 device-mode sinif surucusu.
+# EFI_USBFN_IO_PROTOCOL (UsbfnDwc3Dxe) uzerinde durur; M2a'da yalnizca
+# enumerasyonu kanitlar (bkz. B2LUsbSerialDxe.c).
+#
+
+[Sources]
+  B2LUsbSerialDxe.c
+  B2LUsbSerialDiag.h
+
+[Packages]
+  MdePkg/MdePkg.dec
+
+[LibraryClasses]
+  BaseLib
+  BaseMemoryLib
+  DebugLib
+  IoLib
+  UefiBootServicesTableLib
+  UefiDriverEntryPoint
+  UefiLib
+
+[Protocols]
+  gEfiUsbFunctionIoProtocolGuid
+
+[Depex]
+  gEfiUsbFunctionIoProtocolGuid

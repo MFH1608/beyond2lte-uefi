@@ -198,3 +198,10 @@
   beyond0ltePkg/Drivers/B2LTouchDxe/B2LTouchDxe.inf
   SiliciumPkg/Drivers/KeypadDxe/KeypadDxe.inf
   SiliciumPkg/Drivers/KeypadDeviceDxe/KeypadDeviceDxe.inf
+
+  #
+  # USB device-mode sinif surucusu (M2a: enumerasyon). UsbfnDwc3Dxe'nin
+  # yayinladigi EFI_USBFN_IO_PROTOCOL uzerinde durur; ekrandaki "USB.ser"
+  # satirindan izlenir (bkz. Drivers/B2LUsbSerialDxe).
+  #
+  beyond0ltePkg/Drivers/B2LUsbSerialDxe/B2LUsbSerialDxe.inf

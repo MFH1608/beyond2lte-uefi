@@ -114,6 +114,14 @@
   #
   INF SamsungPkg/Drivers/UsbfnDwc3Dxe/UsbfnDwc3Dxe.inf
 
+  #
+  # DWC3 device-mode sinif surucusu (M2a: enumerasyon). UsbfnDwc3Dxe'nin
+  # EFI_USBFN_IO_PROTOCOL'u uzerinde durur; StartController +
+  # ConfigureEnableEndpoints cagirir ve olay dongusunu pompa eder.
+  # Ekrandaki "USB.ser" satirindan izlenir.
+  #
+  INF beyond0ltePkg/Drivers/B2LUsbSerialDxe/B2LUsbSerialDxe.inf
+
   INF MdeModulePkg/Universal/Disk/DiskIoDxe/DiskIoDxe.inf
   INF MdeModulePkg/Universal/Disk/PartitionDxe/PartitionDxe.inf
 

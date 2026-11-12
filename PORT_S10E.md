@@ -905,6 +905,80 @@ ada di `BdsDxe.efi`.
 > Setiap penambahan modul ke `FVMAIN` berikutnya hampir pasti butuh
 > memindahkan/menghapus modul lain lebih dulu.
 
+### 6.5 M2a: driver kelas gadget — buktikan enumerasi dulu
+
+Kelas gadget target akhirnya **CDC-ACM serial** (PC melihat `/dev/ttyACM`). Karena
+enumerasi dan mesin kontrol adalah bagian paling rapuh (dan paling sulit dibedakan
+saat gagal), M2 dikerjakan **bertahap**: **M2a** hanya membuktikan PC
+mengenumerasi perangkat dan mesin Setup berjalan; **M2b** baru menambahkan
+descriptor CDC-ACM + request kelas + echo bulk.
+
+#### Batasan `EFI_USBFN_IO_PROTOCOL` yang membentuk desain
+
+Recon `SamsungPkg/Drivers/UsbfnDwc3Dxe` menunjukkan kontrak protokol ini sangat
+sempit (memang begitu spec-nya):
+
+- `ConfigureEnableEndpoints` hanya membaca `ConfigInfoTable[0]->InterfaceInfoTable[0]`
+  → **satu konfigurasi, satu interface**.
+- Hanya endpoint **Bulk** diterima; non-Bulk → `EFI_UNSUPPORTED`
+  (tidak ada interrupt/isochronous di protokol ini).
+- `DeviceDescriptor`/`ConfigDescriptor` **tidak dibaca** controller; controller
+  hanya butuh daftar endpoint untuk diaktifkan. Jadi descriptor yang dijawab ke
+  host sepenuhnya milik driver kelas.
+- `SET_ADDRESS` ditangani controller sendiri (tulis `DCFG`), **tidak** diteruskan
+  ke driver kelas. `SET_CONFIG`/`SET_INTERFACE` mereset endpoint non-control lalu
+  diteruskan. Sisanya (`GET_DESCRIPTOR`, `GET_STATUS`, ...) diteruskan sebagai
+  `EfiUsbMsgSetupPacket` dan **harus** dijawab driver kelas lewat `Transfer` EP0.
+- `ConfigureEnableEndpoints` = titik yang menyetel `DCTL.RUN_STOP`.
+
+#### Yang ditambahkan
+
+| Berkas | Isi |
+| --- | --- |
+| `beyond0ltePkg/Drivers/B2LUsbSerialDxe/B2LUsbSerialDxe.c` | Driver kelas M2a. Entry: `StartController` → `AllocateTransferBuffer` (EP0) → `ConfigureEnableEndpoints` → timer 1 ms (TPL_CALLBACK) yang memompa `EventHandler`. Menjawab request standar (GET_DESCRIPTOR device/config/string, GET_STATUS, GET_CONFIG/GET_INTERFACE, SET_CONFIG/SET_INTERFACE, SET/CLEAR_FEATURE). |
+| `beyond0ltePkg/Drivers/B2LUsbSerialDxe/B2LUsbSerialDiag.h` | Protokol teshis `B2L_USB_SERIAL_DIAG_PROTOCOL_GUID`, pola sama dengan `B2LTouchDiag.h` (GUID/yerlesim lokal di kedua modul, Signature `"BUD1"`). |
+| `beyond0ltePkg/Drivers/B2LUsbSerialDxe/B2LUsbSerialDxe.inf` | `FILE_GUID 7C4B1E92-3A85-4D67-B0F2-9E5C8A1D4F30`; `Depex gEfiUsbFunctionIoProtocolGuid`. |
+| `beyond0ltePkg/beyond0lte.dsc` `[Components]` | `beyond0ltePkg/Drivers/B2LUsbSerialDxe/B2LUsbSerialDxe.inf` (penyebab build `F001` sebelumnya: INF di `DXE.inc` saja tidak cukup — harus juga di `[Components]` DSC). |
+| `beyond0ltePkg/Include/DXE.inc` | `INF .../B2LUsbSerialDxe.inf` (masuk FVMAIN). |
+| `B2LPlatformBootManager.c` | Baris live `USB.ser` + mirror `B2L_USB_SERIAL_DIAG` (GUID/struct lokal). |
+
+Descriptor M2a sengaja minimal: **1 konfigurasi, 1 interface** (vendor `0xFF`,
+**tanpa endpoint**), `VID 0x04E8 / PID 0x2143`. Artinya hanya EP0 yang aktif;
+tujuannya memisahkan "enumerasi jalan?" dari "CDC-ACM benar?".
+
+`beyond2lte` **tidak disentuh**; tidak ada perubahan di layer SoC untuk M2a.
+
+#### Bagaimana bukti dibaca
+
+Baris `USB.ser` di self-test:
+
+- **Merah `USB.ser: s=N st=%r`** → driver berhenti di tahap `N` dengan status
+  `%r` (rentetan `ENTRY`→`INSTALL`→`LOCATE`→`START`→`BUFFER`→`CONFIG`→`TIMER`→
+  `DONE`; lihat `B2LUsbSerialDiag.h`). Menunjukkan **tepat** adegan mana yang gagal.
+- **Hijau `USB.ser: su=NN cf=1 ad=N`** → enumerasi berhasil: `su` = jumlah setup
+  yang diterima, `cf=1` = `SET_CONFIGURATION` diterima, `ad` = alamat USB yang
+  ditulis controller ke `DCFG` (dibaca langsung dari register, bukan dari driver).
+- **Abu-abu `USB.ser: no diag protocol`** → protokol teshis tidak ketemu
+  (module tidak jalan atau Signature/Size tak cocok).
+
+Di PC, saat perangkat terhubung: `lsusb` harus menampilkan `04e8:2143`
+(Mu-Silicium / Samsung Exynos Gadget) dan kernel mencatat perangkat baru di
+`dmesg`.
+
+#### Bundel flash (M2a)
+
+`bash tools_flash_bundle.sh -d beyond0lte -o ~/Downloads`
+
+| Berkas | SHA-256 |
+| --- | --- |
+| `~/Downloads/beyond0lte-flash/uefi-boot.tar` | `f267064a81049e5fa27f5cd32b4ab80bf211345a11ea7da624f1c806e4edd44c` |
+| `~/Downloads/beyond0lte-flash/Mu-beyond0lte.img` | `1c5cb97d530faa8c44c558bbca205738c048a66525a863e47755b137d09a8f1a` |
+
+Build: `YAP_RC=0`, **68 image**. `B2LUsbSerialDxe` (GUID
+`7C4B1E92-3A85-4D67-B0F2-9E5C8A1D4F30`) ada di `FVMAIN`; string `USB.ser` ada di
+`BdsDxe.efi`. `FVMAIN_COMPACT` terpakai `0xd2450` dari `0x400000` (naik ~`0x640`
+dari M1) — masih sangat lega.
+
 ---
 
 ## 7. Rollback

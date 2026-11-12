@@ -103,6 +103,51 @@ typedef struct {
 STATIC CONST EFI_GUID  mB2LTouchDiagGuid = B2L_TOUCH_DIAG_PROTOCOL_GUID;
 
 //
+// B2LUsbSerialDxe'nin yayinladigi teshis protokolu (bkz.
+// Drivers/B2LUsbSerialDxe/B2LUsbSerialDiag.h). Ayni sekilde GUID ve yerlesim
+// burada yerel olarak tekrarlanir; iki taraf AYNI kalmak zorundadir.
+//
+#define B2L_USB_SERIAL_DIAG_PROTOCOL_GUID \
+  { 0x2f7c9a14, 0x5b6d, 0x4a83, { 0x91, 0x2e, 0x7c, 0x4f, 0xb1, 0x0a, 0x63, 0xd8 } }
+
+#define B2L_USB_SERIAL_DIAG_SIGNATURE  0x31445542U   // "BUD1"
+
+#define B2L_USB_STAGE_DONE             7
+
+typedef struct {
+  UINT32  Signature;
+  UINT32  Size;
+  UINT32  Stage;
+  UINT32  Reserved0;
+  UINT64  EntryStatus;
+  UINT64  LocateStatus;
+  UINT64  StartStatus;
+  UINT64  BufferStatus;
+  UINT64  ConfigStatus;
+  UINT64  TimerStatus;
+  UINT32  Pumps;
+  UINT32  Setups;
+  UINT32  Configured;
+  UINT32  Addr;
+  UINT32  Stalls;
+  UINT32  TxDone;
+  UINT32  RxDone;
+  UINT32  BusEvents;
+  UINT32  LastBRequest;
+  UINT32  LastBMRequestType;
+  UINT32  LastValue;
+  UINT32  Gctl;
+  UINT32  Dctl;
+  UINT32  Dsts;
+} B2L_USB_SERIAL_DIAG;
+
+typedef struct {
+  B2L_USB_SERIAL_DIAG  Diag;
+} B2L_USB_SERIAL_DIAG_PROTOCOL;
+
+STATIC CONST EFI_GUID  mB2LUsbDiagGuid = B2L_USB_SERIAL_DIAG_PROTOCOL_GUID;
+
+//
 // Konsolun yazi tipi 8x19 pikselde sabittir (EFI_GLYPH_WIDTH/HEIGHT
 // degistirilemez), bu yuzden 1080x2280 ekranda fotograftan okumak zor.
 // B2LGoster'daki gibi glifleri HII font protokolunden alip OLCEK kat
@@ -702,6 +747,8 @@ B2LSelfTest (
   UINT32                         TouchPolls;
   UINT32                         TouchHits;
   UINT32                         DynTop;
+  B2L_USB_SERIAL_DIAG_PROTOCOL   *UsbDiag;
+  BOOLEAN                        UsbDiagOk;
   CHAR16                         LastKey[56];
   CHAR16                         LastTouch[80];
 
@@ -714,6 +761,8 @@ B2LSelfTest (
   TouchHits   = 0;
   TouchDiag   = NULL;
   DynTop      = 0;
+  UsbDiag     = NULL;
+  UsbDiagOk   = FALSE;
 
   //
   // Buyuk yazi icin GOP + HII font gerekli. Ikisi de FV'de
@@ -783,6 +832,26 @@ B2LSelfTest (
     }
   } else {
     TouchDiag = NULL;
+  }
+
+  //
+  // USB device-mode sinif surucusunun teshis protokolu. M2a'da asil soru
+  // "PC enumerasyonu yapti mi": su (setup) ve cf (SET_CONFIGURATION) bu
+  // yuzden ekranda. Yerlesim tutmazsa satir hic cizilmez.
+  //
+  Status = gBS->LocateProtocol (
+                  (EFI_GUID *)(VOID *)&mB2LUsbDiagGuid,
+                  NULL,
+                  (VOID **)&UsbDiag
+                  );
+  if (!EFI_ERROR (Status) &&
+      (UsbDiag != NULL) &&
+      (UsbDiag->Diag.Signature == B2L_USB_SERIAL_DIAG_SIGNATURE) &&
+      (UsbDiag->Diag.Size == (UINT32)sizeof (B2L_USB_SERIAL_DIAG)))
+  {
+    UsbDiagOk = TRUE;
+  } else {
+    UsbDiag = NULL;
   }
 
   if (!HasTouch) {
@@ -1009,6 +1078,32 @@ B2LSelfTest (
         (UINT32)TouchPolls,
         (UINT32)TouchHits
         );
+    }
+
+    //
+    // USB device-mode: basarisizsa HANGI asama + o asamanin status'u; basarili
+    // ise enumerasyon kaniti (su = gelen setup sayisi, cf = SET_CONFIGURATION,
+    // ad = atanan adres). Tek satir, cunku ekran dolu.
+    //
+    if (UsbDiagOk) {
+      if (UsbDiag->Diag.Stage != B2L_USB_STAGE_DONE) {
+        B2LUiPrint (
+          B2L_UI_KIRMIZI,
+          L"USB.ser: s=%u st=%r",
+          UsbDiag->Diag.Stage,
+          (EFI_STATUS)(UINTN)UsbDiag->Diag.EntryStatus
+          );
+      } else {
+        B2LUiPrint (
+          (UsbDiag->Diag.Configured != 0) ? B2L_UI_YESIL : B2L_UI_SARI,
+          L"USB.ser: su=%u cf=%u ad=%u",
+          UsbDiag->Diag.Setups,
+          UsbDiag->Diag.Configured,
+          UsbDiag->Diag.Addr
+          );
+      }
+    } else {
+      B2LUiPrint (B2L_UI_GRI, L"USB.ser: no diag protocol");
     }
 
     if (Exit) {
