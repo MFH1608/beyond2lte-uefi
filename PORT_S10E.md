@@ -901,9 +901,11 @@ Build: `YAP_RC=0`, **67 image**. `UsbfnDwc3Dxe` (GUID
 `PlatformUsbfnLib` 9820 (`BoardInit.obj`) terkompilasi; string `USB.dev`/`USB.ctl`
 ada di `BdsDxe.efi`.
 
-> **Catatan FVMAIN:** `TOTAL=0x42f000`, `TAKEN=0x42ecb0` — sisa hanya ~0x350.
-> Setiap penambahan modul ke `FVMAIN` berikutnya hampir pasti butuh
-> memindahkan/menghapus modul lain lebih dulu.
+> **Catatan FVMAIN:** `FVMAIN` (tak terkompresi) adalah FV yang **auto-size**
+> (`NumBlocks=0`): ia tumbuh mengikuti isi, jadi angka "sisa" di `FVMAIN.Fv.map`
+> hanya sesaat dan bukan batas nyata. Batas nyata adalah **`FVMAIN_COMPACT`**
+> yang ukurannya tetap (`0x400000`, sebesar FD). Di M1 ia terpakai `0xd1e18`
+> (lihat §6.5 untuk angka M2a) — masih sangat lega.
 
 ### 6.5 M2a: driver kelas gadget — buktikan enumerasi dulu
 
