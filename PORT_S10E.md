@@ -132,6 +132,7 @@ dipakai bersama oleh `beyond0ltePkg`.
 
 ```
 mu-silicium-overlay/Platforms/Samsung/beyond0ltePkg/   (salinan beyond2ltePkg + edit di §2)
+mu-silicium-overlay/Silicon/Samsung/S5E9820Pkg/Library/ResetSystemLib/  ← fix reset SoC (§6.9)
 mu-silicium-overlay/Resources/Configs/beyond0lte.toml
 mu-silicium-overlay/Resources/DTBs/beyond0lte.dts/.dtb  ← DTB asli S10e, lihat §5
 tools_dtb_s10e.sh                                        ← pembuat DTB asli
@@ -1457,6 +1458,74 @@ tampil sekali. (Jalur RX sendiri tidak berubah; `rx`/`kr` tetap naik.)
 Langkah berikutnya yang wajar: pakai Shell ini untuk menyiapkan ESP/boot
 option langsung dari perangkat (mis. `bcfg boot add`, atau tulis
 `\EFI\BOOT\BOOTAA64.EFI` ke partisi FAT) — pintu menuju boot OS seperti S10+.
+
+---
+
+### 6.9 M4: `reset` dari Shell benar-benar me-restart SoC
+
+Perintah `reset` di EFI Shell dulu berakhir `ASSERT` dan HP hang. Sebabnya
+bukan Shell, melainkan nilai register `SWRESET` di `ResetSystemLib` **level
+SoC** (S5E9820) yang salah setelah commit refactor upstream.
+
+#### Gejala
+
+```
+Shell> reset
+DXE ResetSystem2: ResetType Cold, Call Depth = 1.
+ASSERT [ResetSystemRuntimeDxe] ResetSystem.c(334): ((BOOLEAN)(0==1))
+```
+
+Setelah itu perangkat diam: tidak restart, tidak merespon.
+
+#### Akar masalah
+
+- `ResetSystemRuntimeDxe` me-link `S5E9820Pkg/Library/ResetSystemLib`
+  (dikonfirmasi dari `static_library_files.lst` modul tsb), bukan jalur PSCI.
+- `ResetCold()` menulis `MmioWrite32 (mPmuRegion.Address + SWRESET, TRUE)`
+  — yaitu **0x1**, padahal bit pemicu reset yang benar adalah **0x2**
+  (`1 << 1`). Region `PMU` sendiri terpetakan (tidak ada warning "isn't
+  Mapped"), jadi tulisannya jalan — hanya nilainya salah.
+- Karena register tidak memicu reset HW, `ResetCold()` kembali ke RuntimeDxe
+  → `ASSERT (FALSE)` di `ResetSystem.c:334` → hang.
+- Ini **regresi**: commit `db939b45` (*S5E9820: Add ResetSystemLib*) memakai
+  `SWRESET_TRIGGER (1 << 1)`; commit `53172176` (*Exynos: Refactor*)
+  menggantinya menjadi `TRUE`.
+- Referensi (dikutip `Source.txt` commit awal): `exynos-reboot.c`
+  (CruelKernel/samsung-exynos9820) → `SWRESET 0x3A00`,
+  `SWRESET_TRIGGER (1 << 1)`, lalu `exynos_pmu_write(SWRESET,
+  SWRESET_TRIGGER)`. S5E9830 (saudara di repo yang sama) juga memakai 0x2.
+
+#### Perbaikan
+
+File overlay baru (level SoC; ikut disalin ke Mu-Silicium tiap build oleh
+`yap.sh`):
+
+```
+mu-silicium-overlay/Silicon/Samsung/S5E9820Pkg/Library/ResetSystemLib/ResetSystem.c
+mu-silicium-overlay/Silicon/Samsung/S5E9820Pkg/Library/ResetSystemLib/Pmu.h   ← +SWRESET_TRIGGER
+```
+
+```
+-  MmioWrite32 (mPmuRegion.Address + SWRESET, TRUE);
++  MmioWrite32 (mPmuRegion.Address + SWRESET, SWRESET_TRIGGER);   // 0x2
+```
+
+Karena ini layer SoC bersama, perbaikan juga berlaku untuk `beyond2lte`
+(bug yang sama ada di sana; ini perbaikan, bukan perubahan perilaku yang
+merusak).
+
+#### Bundel flash (M4)
+
+```
+~/Downloads/beyond0lte-flash.zip                                    sha256 7783d5ecfd8d9ee692fb1988ff08839b0536202c0b12f4ce3e533767ff7f9a9f
+  uefi-boot.tar        sha256 7ff7f525874d16c46f734ddde952444bb507f27297a7959f5abbf0c155f0fdac
+  Mu-beyond0lte.img    sha256 b1d93295006c068b290f38ebfc1fcd0749cd05bfdc4f74665e22c07b1ac13fda
+```
+
+#### Verifikasi: SUKSES
+
+- Dari `Shell>`, `reset` → **HP benar-benar restart** (bukan hang).
+- Tidak muncul lagi `ASSERT [ResetSystemRuntimeDxe] ResetSystem.c(334)`.
 
 ---
 
