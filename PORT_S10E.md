@@ -646,7 +646,17 @@ Bundle final: `uefi-boot.tar` SHA-256
 `Mu-beyond0lte.img` SHA-256
 `bc1303dfb1c7fe3695b9aa5219b528da2f6032bdc5d4c2b2efaee88f795db38c`
 (zip `f981ffc85a1343a62acd42b72a0c096e0db1498ef699ce8cbae9807792249060`).
-**Status: sentuh terverifikasi penuh.**
+
+Konfirmasi setelah flash bundle final:
+
+| Baris | Hasil | Arti |
+| --- | --- | --- |
+| `Touch.dx` | `st=Not Ready poll=1464 hit=719` | saat diam kini `Not Ready` (perbaikan benar) |
+| `Touch` | `X=3184 Y=3648 Z=0 btn=0x0` | state `RELEASE` (tombol lepas) |
+| `Touch.raw` | `C4 C7 E4 00 08 08 20 00` | `RELEASE`, X=0xC70=3184, Y=0xE40=3648 — cocok |
+
+**Status: sentuh terverifikasi penuh** — koordinat, tombol, dan pelabelan
+status semuanya benar; `beyond2ltePkg` tidak disentuh.
 
 ---
 
