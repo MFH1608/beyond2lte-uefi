@@ -46,6 +46,9 @@
 #include <Library/UefiLib.h>
 
 #include <Protocol/UsbFunctionIo.h>
+#include <Protocol/SimpleTextIn.h>
+#include <Protocol/SimpleTextOut.h>
+#include <Protocol/DevicePath.h>
 
 #include "B2LUsbSerialDiag.h"
 
@@ -132,6 +135,160 @@ typedef struct {
   UINT8   DataBits;
 } B2L_USB_LINE_CODING;
 #pragma pack()
+
+//
+// ================= M3: UEFI konsol koprusu =================
+//
+// B2LUsbSerialDxe burada UC protokol daha yayinlar: Simple Text In, Simple
+// Text Out ve bir DevicePath. B2LPlatformBootManager bu DevicePath'i
+// ConIn/ConOut/ErrOut degiskenlerine ekler; ConPlatform + ConSplitter onu
+// toplu (agregat) konsola katar. Boylece PC klavyesi gST->ConIn'e, gST->ConOut
+// ise CDC-ACM Bulk IN'e gider. Rota B2LUiPrint gibi GOP tabanli degil, gercek
+// UEFI konsolu oldugu icin self-test ekrani bundan etkilenmez.
+//
+#define B2L_CONSOLE_KEY_QUEUE   64     // kuyruktaki EFI_INPUT_KEY sayisi
+#define B2L_CONSOLE_TX_SIZE     4096   // USB'ye gidecek bayt halkasi (ring)
+#define B2L_CONSOLE_MODE_COLS   200    // agregati kucultmemek icin buyuk mod
+#define B2L_CONSOLE_MODE_ROWS   60
+
+//
+// Konsol cihaz yolu. Ayni GUID B2LPlatformBootManager.c icinde de sabittir;
+// iki taraf AYNI kalmak zorundadir (ConPlatform path'i boyle eslestirir).
+//
+#define B2L_USB_SERIAL_CONSOLE_GUID \
+  { 0x6d2b8f41, 0x3c7a, 0x4e19, { 0x8a, 0xd5, 0x2b, 0x90, 0x4c, 0x6f, 0x13, 0xe7 } }
+
+typedef struct {
+  VENDOR_DEVICE_PATH       Vendor;
+  EFI_DEVICE_PATH_PROTOCOL End;
+} B2L_USB_SERIAL_DEVICE_PATH;
+
+STATIC EFI_STATUS EFIAPI B2LTextInReset (
+  IN EFI_SIMPLE_TEXT_INPUT_PROTOCOL  *This,
+  IN BOOLEAN                         ExtendedVerification
+  );
+
+STATIC EFI_STATUS EFIAPI B2LReadKeyStroke (
+  IN EFI_SIMPLE_TEXT_INPUT_PROTOCOL  *This,
+  OUT EFI_INPUT_KEY                  *Key
+  );
+
+STATIC EFI_STATUS EFIAPI B2LTextOutReset (
+  IN EFI_SIMPLE_TEXT_OUTPUT_PROTOCOL  *This,
+  IN BOOLEAN                          ExtendedVerification
+  );
+
+STATIC EFI_STATUS EFIAPI B2LOutputString (
+  IN EFI_SIMPLE_TEXT_OUTPUT_PROTOCOL  *This,
+  IN CHAR16                           *String
+  );
+
+STATIC EFI_STATUS EFIAPI B2LTestString (
+  IN EFI_SIMPLE_TEXT_OUTPUT_PROTOCOL  *This,
+  IN CHAR16                           *String
+  );
+
+STATIC EFI_STATUS EFIAPI B2LQueryMode (
+  IN EFI_SIMPLE_TEXT_OUTPUT_PROTOCOL  *This,
+  IN UINTN                            ModeNumber,
+  OUT UINTN                           *Columns,
+  OUT UINTN                           *Rows
+  );
+
+STATIC EFI_STATUS EFIAPI B2LSetMode (
+  IN EFI_SIMPLE_TEXT_OUTPUT_PROTOCOL  *This,
+  IN UINTN                            ModeNumber
+  );
+
+STATIC EFI_STATUS EFIAPI B2LSetAttribute (
+  IN EFI_SIMPLE_TEXT_OUTPUT_PROTOCOL  *This,
+  IN UINTN                            Attribute
+  );
+
+STATIC EFI_STATUS EFIAPI B2LClearScreen (
+  IN EFI_SIMPLE_TEXT_OUTPUT_PROTOCOL  *This
+  );
+
+STATIC EFI_STATUS EFIAPI B2LSetCursorPosition (
+  IN EFI_SIMPLE_TEXT_OUTPUT_PROTOCOL  *This,
+  IN UINTN                            Column,
+  IN UINTN                            Row
+  );
+
+STATIC EFI_STATUS EFIAPI B2LEnableCursor (
+  IN EFI_SIMPLE_TEXT_OUTPUT_PROTOCOL  *This,
+  IN BOOLEAN                          Enable
+  );
+
+STATIC EFI_SIMPLE_TEXT_OUTPUT_MODE  mConsoleOutMode = {
+  1, 0, 0, 0, 0, TRUE
+};
+
+STATIC EFI_SIMPLE_TEXT_INPUT_PROTOCOL  mConsoleIn = {
+  B2LTextInReset,
+  B2LReadKeyStroke,
+  NULL
+};
+
+STATIC EFI_SIMPLE_TEXT_OUTPUT_PROTOCOL  mConsoleOut = {
+  B2LTextOutReset,
+  B2LOutputString,
+  B2LTestString,
+  B2LQueryMode,
+  B2LSetMode,
+  B2LSetAttribute,
+  B2LClearScreen,
+  B2LSetCursorPosition,
+  B2LEnableCursor,
+  &mConsoleOutMode
+};
+
+//
+// Konsol cihaz yolu. mConsoleHandle bu protokollerle yayinlanir; boot manager
+// bu DevicePath'i ConIn/ConOut degiskenlerine ekler.
+//
+STATIC CONST B2L_USB_SERIAL_DEVICE_PATH  mConsoleDevicePath = {
+  {
+    {
+      HARDWARE_DEVICE_PATH,
+      HW_VENDOR_DP,
+      { (UINT8)(sizeof (VENDOR_DEVICE_PATH)), (UINT8)((sizeof (VENDOR_DEVICE_PATH)) >> 8) }
+    },
+    B2L_USB_SERIAL_CONSOLE_GUID
+  },
+  {
+    END_DEVICE_PATH_TYPE,
+    END_ENTIRE_DEVICE_PATH_SUBTYPE,
+    { (UINT8)(sizeof (EFI_DEVICE_PATH_PROTOCOL)), (UINT8)((sizeof (EFI_DEVICE_PATH_PROTOCOL)) >> 8) }
+  }
+};
+
+STATIC EFI_HANDLE  mConsoleHandle = NULL;
+STATIC EFI_EVENT   mKeyEvent      = NULL;
+
+//
+// Tus kuyrugu. Pump gelen baytlari buraya tus olarak yazar; ReadKeyStroke
+// buradan okur.
+//
+STATIC EFI_INPUT_KEY  mKeyQueue[B2L_CONSOLE_KEY_QUEUE];
+STATIC UINT32         mKeyHead  = 0;
+STATIC UINT32         mKeyTail  = 0;
+STATIC UINT32         mKeyCount = 0;
+
+//
+// Giden (TX) bayt halkasi. Konsol cikisi + giris yankisi buradan Bulk IN'e
+// akitilir. Ayni anda yalnizca BIR Transfer ucabilir (mTxBusy).
+//
+STATIC UINT8    mTxRing[B2L_CONSOLE_TX_SIZE];
+STATIC UINT32   mTxHead  = 0;
+STATIC UINT32   mTxTail  = 0;
+STATIC UINT32   mTxCount = 0;
+STATIC BOOLEAN  mTxBusy  = FALSE;
+
+//
+// ESC dizisi cozumleme durumu: 0 = yok, 1 = ESC, 2 = ESC[, 3 = ESC O.
+//
+STATIC UINT8  mEscState = 0;
 
 STATIC EFI_USBFN_IO_PROTOCOL         *mFn;
 STATIC B2L_USB_SERIAL_DIAG_PROTOCOL   mDiagProtocol;
@@ -413,9 +570,410 @@ B2LUsbStartBulkRead (
          );
 }
 
+//
+// ================= Konsol yardimcilari (M3) =================
+//
+
 /**
-  Bulk OUT tamamlandi: gelen baytlari aynen Bulk IN'e geri yaz (echo). IN
-  mesgulse okumayi yeniden kur; host veriyi tekrar dener.
+  Bir tusu kuyruga yaz. Kuyruk doluysa en eski tus duser (klavye tamponu gibi);
+  konsol girisinde bloklama yoktur.
+**/
+STATIC
+VOID
+B2LKeyPush (
+  IN UINT16  ScanCode,
+  IN CHAR16  UnicodeChar
+  )
+{
+  if (mKeyCount >= B2L_CONSOLE_KEY_QUEUE) {
+    mKeyHead = (mKeyHead + 1) % B2L_CONSOLE_KEY_QUEUE;
+    mKeyCount--;
+  }
+
+  mKeyQueue[mKeyTail].ScanCode    = ScanCode;
+  mKeyQueue[mKeyTail].UnicodeChar = UnicodeChar;
+  mKeyTail                        = (mKeyTail + 1) % B2L_CONSOLE_KEY_QUEUE;
+  mKeyCount++;
+}
+
+/**
+  WaitForKey bildirimi. SimpleTextInOutSerial ile ayni desen: EVT_NOTIFY_WAIT
+  olayini yalnizca kuyrukta tus varsa isaretle. ConSplitter kendi toplu
+  WaitForKey'inde her cihazin bu olayini CheckEvent ile yoklar.
+**/
+STATIC
+VOID
+EFIAPI
+B2LKeyNotify (
+  IN EFI_EVENT  Event,
+  IN VOID      *Context
+  )
+{
+  if (mKeyCount != 0) {
+    gBS->SignalEvent (Event);
+  }
+}
+
+/**
+  Gelen konsol baytini tusa cevir. ESC tabanli oklari (VT100/PC ANSI) ve
+  DEL'i destekler; yeterli kadari self-test ve shell icin.
+**/
+STATIC
+VOID
+B2LConsoleFeedByte (
+  IN UINT8  Byte
+  )
+{
+  switch (mEscState) {
+    case 0:
+      if (Byte == 0x1B) {
+        mEscState = 1;
+        return;
+      }
+
+      if ((Byte == CHAR_BACKSPACE) || (Byte == CHAR_TAB) ||
+          (Byte == CHAR_LINEFEED)  || (Byte == CHAR_CARRIAGE_RETURN))
+      {
+        B2LKeyPush (SCAN_NULL, (CHAR16)Byte);
+        return;
+      }
+
+      if (Byte == 0x7F) {
+        B2LKeyPush (SCAN_DELETE, 0);
+        return;
+      }
+
+      B2LKeyPush (SCAN_NULL, (CHAR16)Byte);
+      return;
+
+    case 1:
+      if (Byte == '[') {
+        mEscState = 2;
+        return;
+      }
+
+      if (Byte == 'O') {
+        mEscState = 3;
+        return;
+      }
+
+      B2LKeyPush (SCAN_ESC, 0);
+      mEscState = 0;
+      return;
+
+    case 2:
+      mEscState = 0;
+      switch (Byte) {
+        case 'A': B2LKeyPush (SCAN_UP, 0);    break;
+        case 'B': B2LKeyPush (SCAN_DOWN, 0);  break;
+        case 'C': B2LKeyPush (SCAN_RIGHT, 0); break;
+        case 'D': B2LKeyPush (SCAN_LEFT, 0);  break;
+        case 'H': B2LKeyPush (SCAN_HOME, 0);  break;
+        case 'F': B2LKeyPush (SCAN_END, 0);   break;
+        default: break;
+      }
+
+      return;
+
+    case 3:
+      mEscState = 0;
+      switch (Byte) {
+        case 'P': B2LKeyPush (SCAN_F1, 0); break;
+        case 'Q': B2LKeyPush (SCAN_F2, 0); break;
+        case 'R': B2LKeyPush (SCAN_F3, 0); break;
+        case 'S': B2LKeyPush (SCAN_F4, 0); break;
+        default: break;
+      }
+
+      return;
+
+    default:
+      mEscState = 0;
+      return;
+  }
+}
+
+/**
+  TX halkasindan bir parca gonder. Ayni anda yalnizca bir Transfer ucabilir;
+  bitisinde EfiUsbMsgEndpointStatusChangedTx mTxBusy'yi indirip tekrar cagirir.
+**/
+STATIC
+VOID
+B2LUsbTxPump (
+  VOID
+  )
+{
+  UINTN  Index;
+  UINTN  Count;
+  UINTN  Size;
+  UINT8  *Dst;
+
+  if (mTxBusy || (mTxCount == 0) || !mConfigured) {
+    return;
+  }
+
+  if ((mFn == NULL) || (mBulkInBuffer == NULL)) {
+    return;
+  }
+
+  Count = mTxCount;
+  if (Count > B2L_USB_BULK_BUF_SIZE) {
+    Count = B2L_USB_BULK_BUF_SIZE;
+  }
+
+  Dst = (UINT8 *)mBulkInBuffer;
+  for (Index = 0; Index < Count; Index++) {
+    Dst[Index] = mTxRing[(mTxHead + Index) % B2L_CONSOLE_TX_SIZE];
+  }
+
+  Size = Count;
+  if (mFn->Transfer (
+            mFn,
+            B2L_USB_EP_DATA_IN,
+            EfiUsbEndpointDirectionDeviceTx,
+            &Size,
+            mBulkInBuffer
+            ) == EFI_SUCCESS)
+  {
+    mTxHead                    = (mTxHead + (UINT32)Count) % B2L_CONSOLE_TX_SIZE;
+    mTxCount                  -= (UINT32)Count;
+    mTxBusy                    = TRUE;
+    mDiagProtocol.Diag.TxBytes += (UINT32)Count;
+  }
+}
+
+/**
+  Baytlari TX halkasina ekle ve gonderimi tetikle. Halka dolarsa sessizce
+  damla: konsol cikisi asla bloklanmaz.
+**/
+STATIC
+VOID
+B2LUsbTxPush (
+  IN CONST UINT8  *Data,
+  IN UINTN         Length
+  )
+{
+  UINTN  Index;
+
+  for (Index = 0; Index < Length; Index++) {
+    if (mTxCount >= B2L_CONSOLE_TX_SIZE) {
+      break;
+    }
+
+    mTxRing[mTxTail] = Data[Index];
+    mTxTail          = (mTxTail + 1) % B2L_CONSOLE_TX_SIZE;
+    mTxCount++;
+  }
+
+  B2LUsbTxPump ();
+}
+
+//
+// ================= Simple Text In / Out (M3) =================
+//
+
+STATIC
+EFI_STATUS
+EFIAPI
+B2LTextInReset (
+  IN EFI_SIMPLE_TEXT_INPUT_PROTOCOL  *This,
+  IN BOOLEAN                         ExtendedVerification
+  )
+{
+  mKeyHead  = 0;
+  mKeyTail  = 0;
+  mKeyCount = 0;
+  mEscState = 0;
+  return EFI_SUCCESS;
+}
+
+STATIC
+EFI_STATUS
+EFIAPI
+B2LReadKeyStroke (
+  IN EFI_SIMPLE_TEXT_INPUT_PROTOCOL  *This,
+  OUT EFI_INPUT_KEY                  *Key
+  )
+{
+  if (Key == NULL) {
+    return EFI_INVALID_PARAMETER;
+  }
+
+  if (mKeyCount == 0) {
+    return EFI_NOT_READY;
+  }
+
+  Key->ScanCode    = mKeyQueue[mKeyHead].ScanCode;
+  Key->UnicodeChar = mKeyQueue[mKeyHead].UnicodeChar;
+  mKeyHead         = (mKeyHead + 1) % B2L_CONSOLE_KEY_QUEUE;
+  mKeyCount--;
+
+  mDiagProtocol.Diag.KeyReads++;
+  return EFI_SUCCESS;
+}
+
+STATIC
+EFI_STATUS
+EFIAPI
+B2LTextOutReset (
+  IN EFI_SIMPLE_TEXT_OUTPUT_PROTOCOL  *This,
+  IN BOOLEAN                          ExtendedVerification
+  )
+{
+  This->SetAttribute (
+          This,
+          EFI_TEXT_ATTR (This->Mode->Attribute & 0x0F, EFI_BACKGROUND_BLACK)
+          );
+  return B2LSetMode (This, 0);
+}
+
+STATIC
+EFI_STATUS
+EFIAPI
+B2LOutputString (
+  IN EFI_SIMPLE_TEXT_OUTPUT_PROTOCOL  *This,
+  IN CHAR16                           *String
+  )
+{
+  UINT8   Buffer[64];
+  UINTN   Count;
+  UINTN   Total;
+  CHAR16  Ch;
+
+  if (String == NULL) {
+    return EFI_INVALID_PARAMETER;
+  }
+
+  Count = 0;
+  Total = 0;
+  while ((Ch = *String++) != CHAR_NULL) {
+    Buffer[Count++] = (Ch < 0x80) ? (UINT8)Ch : (UINT8)'?';
+    Total++;
+
+    if (Count == sizeof (Buffer)) {
+      B2LUsbTxPush (Buffer, Count);
+      Count = 0;
+    }
+  }
+
+  if (Count != 0) {
+    B2LUsbTxPush (Buffer, Count);
+  }
+
+  mDiagProtocol.Diag.ConsoleOut += (UINT32)Total;
+  return EFI_SUCCESS;
+}
+
+STATIC
+EFI_STATUS
+EFIAPI
+B2LTestString (
+  IN EFI_SIMPLE_TEXT_OUTPUT_PROTOCOL  *This,
+  IN CHAR16                           *String
+  )
+{
+  //
+  // ASCII disi karakterler '?' olarak gonderilir (bkz. B2LOutputString), yani
+  // her dize desteklenir.
+  //
+  return EFI_SUCCESS;
+}
+
+STATIC
+EFI_STATUS
+EFIAPI
+B2LQueryMode (
+  IN EFI_SIMPLE_TEXT_OUTPUT_PROTOCOL  *This,
+  IN UINTN                            ModeNumber,
+  OUT UINTN                           *Columns,
+  OUT UINTN                           *Rows
+  )
+{
+  if (ModeNumber != 0) {
+    return EFI_UNSUPPORTED;
+  }
+
+  *Columns = B2L_CONSOLE_MODE_COLS;
+  *Rows    = B2L_CONSOLE_MODE_ROWS;
+  return EFI_SUCCESS;
+}
+
+STATIC
+EFI_STATUS
+EFIAPI
+B2LSetMode (
+  IN EFI_SIMPLE_TEXT_OUTPUT_PROTOCOL  *This,
+  IN UINTN                            ModeNumber
+  )
+{
+  if (ModeNumber != 0) {
+    return EFI_UNSUPPORTED;
+  }
+
+  This->Mode->Mode = 0;
+  return EFI_SUCCESS;
+}
+
+STATIC
+EFI_STATUS
+EFIAPI
+B2LSetAttribute (
+  IN EFI_SIMPLE_TEXT_OUTPUT_PROTOCOL  *This,
+  IN UINTN                            Attribute
+  )
+{
+  This->Mode->Attribute = (INT32)Attribute;
+  return EFI_SUCCESS;
+}
+
+STATIC
+EFI_STATUS
+EFIAPI
+B2LClearScreen (
+  IN EFI_SIMPLE_TEXT_OUTPUT_PROTOCOL  *This
+  )
+{
+  //
+  // ANSI: ekrani temizle + imleci sol ust koseye al. Coklu cihazin toplandigi
+  // ConSplitter'da kabul edilen minimal davranis.
+  //
+  STATIC CONST UINT8  Clear[] = { 0x1B, '[', '2', 'J', 0x1B, '[', 'H' };
+
+  B2LUsbTxPush (Clear, sizeof (Clear));
+  This->Mode->CursorColumn = 0;
+  This->Mode->CursorRow    = 0;
+  return EFI_SUCCESS;
+}
+
+STATIC
+EFI_STATUS
+EFIAPI
+B2LSetCursorPosition (
+  IN EFI_SIMPLE_TEXT_OUTPUT_PROTOCOL  *This,
+  IN UINTN                            Column,
+  IN UINTN                            Row
+  )
+{
+  This->Mode->CursorColumn = (INT32)Column;
+  This->Mode->CursorRow    = (INT32)Row;
+  return EFI_SUCCESS;
+}
+
+STATIC
+EFI_STATUS
+EFIAPI
+B2LEnableCursor (
+  IN EFI_SIMPLE_TEXT_OUTPUT_PROTOCOL  *This,
+  IN BOOLEAN                          Enable
+  )
+{
+  return EFI_SUCCESS;
+}
+
+/**
+  Bulk OUT tamamlandi. Gelen baytlar (1) tus kuyruguna cozulur, (2) M2b
+  uyumu icin aynen geri yankilanir. Yanki da UEFI konsol cikisi gibi TX
+  halkasindan gider. Okuma hemen yeniden kurulur (TX ayri uc).
 **/
 STATIC
 VOID
@@ -424,7 +982,8 @@ B2LUsbHandleBulkOut (
   )
 {
   UINTN  Length;
-  UINTN  Size;
+  UINTN  Index;
+  UINT8  *Bytes;
 
   Length = Result->BytesTransferred;
   if (Length > B2L_USB_BULK_BUF_SIZE) {
@@ -444,22 +1003,14 @@ B2LUsbHandleBulkOut (
 
   mDiagProtocol.Diag.RxBytes += (UINT32)Length;
 
-  CopyMem (mBulkInBuffer, mBulkOutBuffer, Length);
+  Bytes = (UINT8 *)mBulkOutBuffer;
+  for (Index = 0; Index < Length; Index++) {
+    B2LConsoleFeedByte (Bytes[Index]);
+  }
 
-  Size = Length;
-  if (mFn->Transfer (
-            mFn,
-            B2L_USB_EP_DATA_IN,
-            EfiUsbEndpointDirectionDeviceTx,
-            &Size,
-            mBulkInBuffer
-            ) == EFI_SUCCESS)
-  {
-    mDiagProtocol.Diag.TxBytes += (UINT32)Length;
-  } else if (mConfigured) {
-    //
-    // IN mesgul: okumayi yeniden kur, host tekrar denesin.
-    //
+  B2LUsbTxPush (Bytes, Length);
+
+  if (mConfigured) {
     B2LUsbStartBulkRead ();
   }
 }
@@ -581,10 +1132,11 @@ B2LUsbHandleSetup (
       mDiagProtocol.Diag.Configured = mConfigured ? 1 : 0;
       //
       // Veri asamasi yok; durum asamasi donanim tarafindan tamamlanir.
-      // Konfigurasyon secildi: bulk OUT'ta okumayi baslat.
+      // Konfigurasyon secildi: bulk OUT'ta okumayi baslat, bekleyen cikisi akit.
       //
       if (mConfigured) {
         B2LUsbStartBulkRead ();
+        B2LUsbTxPump ();
       }
       return;
 
@@ -595,6 +1147,7 @@ B2LUsbHandleSetup (
       //
       if (mConfigured) {
         B2LUsbStartBulkRead ();
+        B2LUsbTxPump ();
       }
       return;
 
@@ -654,11 +1207,10 @@ B2LUsbPump (
         mDiagProtocol.Diag.TxDone++;
         if (Payload.utr.EndpointIndex == B2L_USB_EP_DATA_IN) {
           //
-          // Echo gonderildi: siradaki okumayi kur.
+          // Gonderim bitti: TX halkasindan siradakini gonder.
           //
-          if (mConfigured) {
-            B2LUsbStartBulkRead ();
-          }
+          mTxBusy = FALSE;
+          B2LUsbTxPump ();
         }
         break;
 
@@ -674,6 +1226,13 @@ B2LUsbPump (
         mDiagProtocol.Diag.Configured  = 0;
         mDiagProtocol.Diag.Addr        = 0;
         mDiagProtocol.Diag.BusEvents++;
+        //
+        // Reset: ucaktaki gonderim iptal olur, TX halkasini bosalt.
+        //
+        mTxBusy = FALSE;
+        mTxHead = 0;
+        mTxTail = 0;
+        mTxCount = 0;
         break;
 
       case EfiUsbMsgBusEventAttach:
@@ -733,7 +1292,47 @@ B2LUsbSerialEntry (
   mDiagProtocol.Diag.Stage = B2L_USB_STAGE_INSTALL;
 
   //
-  // 2) UsbfnDwc3Dxe'nin yayinladigi protokolu bul.
+  // 2) Konsol protokollerini yayinla (M3). Bu, bring-up'tan ONCE olmali:
+  //    PC kablosu takili olmasa da driver resident kalir ve boot manager
+  //    DevicePath'i ConIn/ConOut'a ekleyebilir. ReadKeyStroke kuyruk bosken
+  //    EFI_NOT_READY doner.
+  //
+  Status = gBS->CreateEvent (
+                  EVT_NOTIFY_WAIT,
+                  TPL_NOTIFY,
+                  B2LKeyNotify,
+                  NULL,
+                  &mKeyEvent
+                  );
+  mDiagProtocol.Diag.EntryStatus = (UINT64)(UINTN)Status;
+  if (EFI_ERROR (Status)) {
+    return Status;
+  }
+
+  mConsoleIn.WaitForKey = mKeyEvent;
+
+  Status = gBS->InstallMultipleProtocolInterfaces (
+                  &mConsoleHandle,
+                  &gEfiSimpleTextInProtocolGuid,
+                  &mConsoleIn,
+                  &gEfiSimpleTextOutProtocolGuid,
+                  &mConsoleOut,
+                  &gEfiDevicePathProtocolGuid,
+                  (VOID *)&mConsoleDevicePath,
+                  NULL
+                  );
+  mDiagProtocol.Diag.EntryStatus = (UINT64)(UINTN)Status;
+  if (EFI_ERROR (Status)) {
+    return Status;
+  }
+
+  mDiagProtocol.Diag.UsbConIn  = (UINT64)(UINTN)&mConsoleIn;
+  mDiagProtocol.Diag.UsbConOut = (UINT64)(UINTN)&mConsoleOut;
+
+  //
+  // 3) UsbfnDwc3Dxe'nin yayinladigi protokolu bul. Bundan sonraki adimlar
+  //    basarisiz olsa bile EFI_SUCCESS doneriz: konsol protokolleri yayinda
+  //    kalmali ve teshis ekrani hangi asamada durdugunu gostermeli.
   //
   mDiagProtocol.Diag.Stage = B2L_USB_STAGE_LOCATE;
   Status = gBS->LocateProtocol (
@@ -744,22 +1343,22 @@ B2LUsbSerialEntry (
   mDiagProtocol.Diag.LocateStatus = (UINT64)(UINTN)Status;
   mDiagProtocol.Diag.EntryStatus  = (UINT64)(UINTN)Status;
   if (EFI_ERROR (Status) || (mFn == NULL)) {
-    return Status;
+    return EFI_SUCCESS;
   }
 
   //
-  // 3) PHY + DWC3 core bring-up.
+  // 4) PHY + DWC3 core bring-up.
   //
   mDiagProtocol.Diag.Stage = B2L_USB_STAGE_START;
   Status = mFn->StartController (mFn);
   mDiagProtocol.Diag.StartStatus = (UINT64)(UINTN)Status;
   mDiagProtocol.Diag.EntryStatus = (UINT64)(UINTN)Status;
   if (EFI_ERROR (Status)) {
-    return Status;
+    return EFI_SUCCESS;
   }
 
   //
-  // 4) EP0 DMA tamponu.
+  // 5) EP0 + CDC-ACM bulk (veri) DMA tamponlari.
   //
   mDiagProtocol.Diag.Stage = B2L_USB_STAGE_BUFFER;
   mEp0Buffer = NULL;
@@ -767,13 +1366,9 @@ B2LUsbSerialEntry (
   mDiagProtocol.Diag.BufferStatus = (UINT64)(UINTN)Status;
   mDiagProtocol.Diag.EntryStatus  = (UINT64)(UINTN)Status;
   if (EFI_ERROR (Status) || (mEp0Buffer == NULL)) {
-    return Status;
+    return EFI_SUCCESS;
   }
 
-  //
-  // 4b) CDC-ACM bulk (veri) tamponlari. EP0 gibi AllocateTransferBuffer ile
-  //     alinirlar (DMA uyumlu). Echo bu iki tampon arasinda yapilir.
-  //
   mBulkOutBuffer = NULL;
   mBulkInBuffer  = NULL;
   if (EFI_ERROR (mFn->AllocateTransferBuffer (mFn, B2L_USB_BULK_BUF_SIZE, &mBulkOutBuffer)) ||
@@ -781,22 +1376,22 @@ B2LUsbSerialEntry (
       (mBulkOutBuffer == NULL) || (mBulkInBuffer == NULL))
   {
     mDiagProtocol.Diag.BufferStatus = (UINT64)(UINTN)EFI_OUT_OF_RESOURCES;
-    return EFI_OUT_OF_RESOURCES;
+    return EFI_SUCCESS;
   }
 
   //
-  // 5) Uc noktalari kur ve portu aktif et (DCTL.RUN_STOP = 1).
+  // 6) Uc noktalari kur ve portu aktif et (DCTL.RUN_STOP = 1).
   //
   mDiagProtocol.Diag.Stage = B2L_USB_STAGE_CONFIG;
   Status = mFn->ConfigureEnableEndpoints (mFn, &mDeviceInfo);
   mDiagProtocol.Diag.ConfigStatus = (UINT64)(UINTN)Status;
   mDiagProtocol.Diag.EntryStatus  = (UINT64)(UINTN)Status;
   if (EFI_ERROR (Status)) {
-    return Status;
+    return EFI_SUCCESS;
   }
 
   //
-  // 6) Olay pompalama zamanlayicisi.
+  // 7) Olay pompalama zamanlayicisi.
   //
   mDiagProtocol.Diag.Stage = B2L_USB_STAGE_TIMER;
   Status = gBS->CreateEvent (
@@ -809,14 +1404,14 @@ B2LUsbSerialEntry (
   mDiagProtocol.Diag.TimerStatus = (UINT64)(UINTN)Status;
   mDiagProtocol.Diag.EntryStatus = (UINT64)(UINTN)Status;
   if (EFI_ERROR (Status)) {
-    return Status;
+    return EFI_SUCCESS;
   }
 
   Status = gBS->SetTimer (mTimer, TimerPeriodic, B2L_USB_PUMP_PERIOD);
   mDiagProtocol.Diag.TimerStatus = (UINT64)(UINTN)Status;
   mDiagProtocol.Diag.EntryStatus = (UINT64)(UINTN)Status;
   if (EFI_ERROR (Status)) {
-    return Status;
+    return EFI_SUCCESS;
   }
 
   mDiagProtocol.Diag.Stage       = B2L_USB_STAGE_DONE;

@@ -25,6 +25,7 @@
 #include <Library/PrintLib.h>
 #include <Library/IoLib.h>
 #include <Library/MemoryAllocationHelperLib.h>
+#include <Library/UefiBootManagerLib.h>
 
 #include <Protocol/BlockIo.h>
 #include <Protocol/AbsolutePointer.h>
@@ -33,6 +34,8 @@
 #include <Protocol/HiiFont.h>
 #include <Protocol/SimpleFileSystem.h>
 #include <Protocol/SimpleTextIn.h>
+#include <Protocol/SimpleTextOut.h>
+#include <Protocol/DevicePath.h>
 #include <Protocol/UsbFunctionIo.h>
 
 //
@@ -142,6 +145,10 @@ typedef struct {
   UINT32  Gctl;
   UINT32  Dctl;
   UINT32  Dsts;
+  UINT64  UsbConIn;
+  UINT64  UsbConOut;
+  UINT32  KeyReads;
+  UINT32  ConsoleOut;
 } B2L_USB_SERIAL_DIAG;
 
 typedef struct {
@@ -149,6 +156,41 @@ typedef struct {
 } B2L_USB_SERIAL_DIAG_PROTOCOL;
 
 STATIC CONST EFI_GUID  mB2LUsbDiagGuid = B2L_USB_SERIAL_DIAG_PROTOCOL_GUID;
+
+//
+// M3: USB seri konsolunun cihaz yolu. B2LUsbSerialDxe AYNI GUID ile bir
+// DevicePath yayinlar; DeviceBootManagerBeforeConsole onu ConIn/ConOut/ErrOut
+// degiskenlerine ekler, ConPlatform + ConSplitter toplu konsola katar. GUID
+// iki modulde AYNI kalmak zorundadir.
+//
+#define B2L_USB_SERIAL_CONSOLE_GUID \
+  { 0x6d2b8f41, 0x3c7a, 0x4e19, { 0x8a, 0xd5, 0x2b, 0x90, 0x4c, 0x6f, 0x13, 0xe7 } }
+
+STATIC CONST struct {
+  VENDOR_DEVICE_PATH       Vendor;
+  EFI_DEVICE_PATH_PROTOCOL End;
+} mB2LUsbConsolePath = {
+  {
+    {
+      HARDWARE_DEVICE_PATH,
+      HW_VENDOR_DP,
+      { (UINT8)(sizeof (VENDOR_DEVICE_PATH)), (UINT8)((sizeof (VENDOR_DEVICE_PATH)) >> 8) }
+    },
+    B2L_USB_SERIAL_CONSOLE_GUID
+  },
+  {
+    END_DEVICE_PATH_TYPE,
+    END_ENTIRE_DEVICE_PATH_SUBTYPE,
+    { (UINT8)(sizeof (EFI_DEVICE_PATH_PROTOCOL)), (UINT8)((sizeof (EFI_DEVICE_PATH_PROTOCOL)) >> 8) }
+  }
+};
+
+//
+// Self-test yazisini PC'ye (yalniz USB) basmak icin B2LUsbSerialDxe'nin
+// Simple Text Out protokolu. UsbDiag->Diag.UsbConOut'tan alinir; 0 ise
+// USB konsolu yok demektir.
+//
+STATIC EFI_SIMPLE_TEXT_OUTPUT_PROTOCOL  *mB2LUsbConOut = NULL;
 
 //
 // Konsolun yazi tipi 8x19 pikselde sabittir (EFI_GLYPH_WIDTH/HEIGHT
@@ -362,6 +404,31 @@ B2LUiPrint (
   VA_END (Marker);
 
   B2LUiLine (Buffer, Color);
+}
+
+/**
+  M3: ayni satiri USB seri konsoluna da yaz. Ekrani etkilemez; mB2LUsbConOut
+  yoksa (USB konsolu yayinda degilse) sessizce gecer.
+**/
+STATIC
+VOID
+B2LUsbPrint (
+  IN CONST CHAR16  *Format,
+  ...
+  )
+{
+  VA_LIST  Marker;
+  CHAR16   Buffer[200];
+
+  if (mB2LUsbConOut == NULL) {
+    return;
+  }
+
+  VA_START (Marker, Format);
+  UnicodeVSPrint (Buffer, sizeof (Buffer), Format, Marker);
+  VA_END (Marker);
+
+  mB2LUsbConOut->OutputString (mB2LUsbConOut, Buffer);
 }
 
 /**
@@ -873,6 +940,16 @@ B2LSelfTest (
       (UsbDiag->Diag.Size == (UINT32)sizeof (B2L_USB_SERIAL_DIAG)))
   {
     UsbDiagOk = TRUE;
+
+    //
+    // M3: USB konsolunun STO'sunu al. Yukaridaki self-test yazisini PC'ye
+    // (yalniz USB'ye) basmak icin kullanilir; ekran GOP/HII ile cizilmeye
+    // devam eder. Pointer 0 ise (ornegin surucu konsolu yayinlayamadiysa)
+    // B2LUsbPrint sessizce gecer.
+    //
+    if (UsbDiag->Diag.UsbConOut != 0) {
+      mB2LUsbConOut = (EFI_SIMPLE_TEXT_OUTPUT_PROTOCOL *)(UINTN)UsbDiag->Diag.UsbConOut;
+    }
   } else {
     UsbDiag = NULL;
   }
@@ -896,6 +973,15 @@ B2LSelfTest (
   B2LUiPrint (B2L_UI_BEYAZ, L"--------------------------------------------------------------");
   B2LUiPrint (B2L_UI_GRI,   L"VolUp/Down=Up/Down Bixby=Enter Bixby+Vol=Exit");
   B2LUiPrint (B2L_UI_BEYAZ, L"--------------------------------------------------------------");
+
+  //
+  // M3: ayni teshis bilgisini USB seri konsoluna da bas. Ekran etkilenmez;
+  // PC'de "screen /dev/ttyACM0 115200" bu satirlari gosterir. Baslik bir kez,
+  // canli satir asagidaki dongude \r ile ayni yere yazilir.
+  //
+  B2LUsbPrint (L"\r\n=== beyond0lte UEFI self-test (USB seri konsol) ===\r\n");
+  B2LUsbPrint (L"Dokunma/klavye/keypad self-test calisiyor. PC'de tuslayin.\r\n");
+  B2LUsbPrint (L"VolUp/Down=Up/Down Bixby=Enter Bixby+Vol=Exit\r\n");
 
   //
   // Statik bolge buraya kadar cizildi. Asagisi her karede temizlenip
@@ -999,6 +1085,22 @@ B2LSelfTest (
       break;
     }
 
+    //
+    // M3: canli satiri USB konsoluna da yaz. \r ile AYNI satira yazip saga
+    // bosluk birakiriz; boylece PC terminalinde titremesiz tek satir olur.
+    // co = konsola yazilan karakter (STO), kr = okunan tus (STI).
+    //
+    B2LUsbPrint (L"\rKey: %s", LastKey);
+    if (UsbDiagOk && (UsbDiag->Diag.Stage == B2L_USB_STAGE_DONE)) {
+      B2LUsbPrint (
+        L"   rx=%u tx=%u co=%u kr=%u     ",
+        UsbDiag->Diag.RxBytes,
+        UsbDiag->Diag.TxBytes,
+        UsbDiag->Diag.ConsoleOut,
+        UsbDiag->Diag.KeyReads
+        );
+    }
+
     gBS->Stall (20000);
   }
 
@@ -1020,6 +1122,17 @@ DeviceBootManagerBeforeConsole (
   OUT BDS_CONSOLE_CONNECT_ENTRY **PlatformConsoles
   )
 {
+  //
+  // M3: USB seri konsolunu ConIn/ConOut/ErrOut listelerine ekle. Bu fonksiyon
+  // SiliciumPkg/BootManagerLib'deki Keypad/Display kayitlarindan hemen sonra
+  // cagrilir, yani BdsEntry konsollari baglamadan once. ConPlatform +
+  // ConSplitter bunu toplu (agregat) konsola katar: PC klavyesi gST->ConIn'e,
+  // gST->ConOut ise CDC-ACM bulk IN'e gider.
+  //
+  EfiBootManagerUpdateConsoleVariable (ConIn,  (EFI_DEVICE_PATH_PROTOCOL *)(VOID *)&mB2LUsbConsolePath, NULL);
+  EfiBootManagerUpdateConsoleVariable (ConOut, (EFI_DEVICE_PATH_PROTOCOL *)(VOID *)&mB2LUsbConsolePath, NULL);
+  EfiBootManagerUpdateConsoleVariable (ErrOut, (EFI_DEVICE_PATH_PROTOCOL *)(VOID *)&mB2LUsbConsolePath, NULL);
+
   return NULL;
 }
 

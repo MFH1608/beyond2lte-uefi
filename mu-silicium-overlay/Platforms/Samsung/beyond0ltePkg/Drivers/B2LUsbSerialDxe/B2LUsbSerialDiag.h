@@ -97,6 +97,20 @@ typedef struct {
   UINT32  Gctl;
   UINT32  Dctl;
   UINT32  Dsts;
+
+  //
+  // M3: UEFI konsol koprusu. Surucunun yayinladigi Simple Text In/Out
+  // protokollerinin isaretcileri (0 degilse hazir). Self-test, buyuk yaziyi
+  // ekrani kirletmeden PC'ye basmak icin UsbConOut'u dogrudan kullanir.
+  //
+  UINT64  UsbConIn;
+  UINT64  UsbConOut;
+
+  //
+  // Konsol sayaclari: kr = okunan tus, co = konsola yazilan karakter.
+  //
+  UINT32  KeyReads;
+  UINT32  ConsoleOut;
 } B2L_USB_SERIAL_DIAG;
 
 typedef struct {

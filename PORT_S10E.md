@@ -136,6 +136,7 @@ mu-silicium-overlay/Resources/Configs/beyond0lte.toml
 mu-silicium-overlay/Resources/DTBs/beyond0lte.dts/.dtb  ← DTB asli S10e, lihat §5
 tools_dtb_s10e.sh                                        ← pembuat DTB asli
 tools_dtbo_extract.py                                    ← pengurai dtbo.img/dt.img
+tools_serial_monitor.py                                  ← monitor serial stdlib (§6.7)
 PORT_S10E.md                                             ← dokumen ini
 ```
 
@@ -1224,6 +1225,114 @@ Terverifikasi: setelah flash, seluruh blok tampil dari paling atas — banner,
 `Block IO 37 device`, `USB.*`, lalu `Key` + `USB.ser: su=14 cf=1 ad=44 pm=10316
 ev=6` / `rx=6 tx=6 lc=1`. Baris kecil `Touch: sec_ts id=…` di paling atas
 adalah keluaran konsol driver sentuh (normal). Tidak ada lagi bagian kosong.
+
+### 6.7 M3: konsol UEFI lewat USB serial (input + output)
+
+Tujuan: kabel USB menjadi **konsol UEFI interaktif** — keyboard PC masuk ke
+`gST->ConIn`, teks UEFI keluar ke terminal PC — tanpa mengubah layar self-test
+(yang tetap digambar langsung ke framebuffer lewat GOP/HII).
+
+#### Bagaimana konsol dibentuk di platform ini
+
+Konsol tidak muncul otomatis. `SiliciumPkg/Library/BootManagerLib/BootManager.c`
+(`PlatformBootManagerBeforeConsole`) mendaftarkan device path secara eksplisit:
+
+```c
+EfiBootManagerUpdateConsoleVariable (ConIn,  &KeypadDevicePath,      NULL);
+EfiBootManagerUpdateConsoleVariable (ConIn,  &UsbKeyboardDevicePath, NULL);
+EfiBootManagerUpdateConsoleVariable (ConOut, &DisplayDevicePath,     NULL);
+EfiBootManagerUpdateConsoleVariable (ErrOut, &DisplayDevicePath,     NULL);
+DeviceBootManagerBeforeConsole (NULL, NULL);   // <- hook milik kita
+```
+
+`BdsEntry` lalu menyambung konsol: ConOut/ErrOut **eager**, ConIn **lazy**
+(dipicu `ReadKeyStroke` pertama). Rantainya:
+
+```
+device path (variabel ConIn/ConOut) -> ConPlatform (menempel
+gEfiConsoleIn/OutDeviceGuid) -> ConSplitter (menggabungkan) -> gST->ConIn/ConOut
+```
+
+Karena itu pendekatannya **konsol standar**, bukan pipa khusus: `B2LUsbSerialDxe`
+menerbitkan `EFI_SIMPLE_TEXT_INPUT_PROTOCOL` + `EFI_SIMPLE_TEXT_OUTPUT_PROTOCOL`
++ satu `EFI_DEVICE_PATH_PROTOCOL` (vendor GUID khusus), lalu
+`DeviceBootManagerBeforeConsole` milik kita menambahkan device path itu ke
+**ConIn, ConOut, dan ErrOut**. ConSplitter menggabungkannya dengan
+Keypad/Display. Tidak ada perubahan pada ConSplitter, ConPlatform, maupun
+SerialPortLib.
+
+#### Yang ditambahkan
+
+1. **Input (M3a).** Setiap bayt Bulk OUT didekode jadi tombol ke queue 64 entri
+   (`ReadKeyStroke`): printable apa adanya; `BS`/`TAB`/`LF`/`CR` sebagai
+   karakter; `DEL` -> `SCAN_DELETE`; `ESC [ A/B/C/D/H/F` ->
+   Up/Down/Right/Left/Home/End; `ESC O P/Q/R/S` -> F1..F4; `ESC` tunggal ->
+   `SCAN_ESC`. `WaitForKey` (EVT_NOTIFY_WAIT) dinyalakan hanya saat queue
+   terisi, mengikuti pola `SimpleTextInOutSerial`.
+2. **Output (M3b).** `OutputString` -> TX **ring 4 KiB** -> Bulk IN. Karena bulk
+   IN hanya satu dan harus satu transfer in-flight, pengiriman dipompa:
+   `Transfer` sekali, lalu `EndpointStatusChangedTx` menurunkan flag dan memompa
+   lanjutan. Echo input (M2b) memakai jalur TX yang sama; `Reset` mengosongkan
+   ring.
+3. **Device path.** Vendor device path (`HW_VENDOR_DP`) dengan GUID
+   `6d2b8f41-3c7a-4e19-8ad5-2b904c6f13e7`; GUID yang sama diulang di
+   `B2LPlatformBootManager.c` supaya ConPlatform memasangkannya.
+4. **Robust tanpa PC.** Bila bring-up USB gagal (tidak ada kabel, depex belum
+   siap, dsb.), driver **tetap `return EFI_SUCCESS`** setelah menerbitkan
+   protokol konsol: protokol tetap resident (boot manager tetap bisa
+   mendaftarkannya) dan layar self-test tetap menunjukkan tahan di stage mana.
+   Kegagalannya tetap terlihat pada baris `USB.ser: s=.. st=..`.
+5. **Mirror self-test.** `B2LUsbSerialDiag.h` menambah `UsbConIn`, `UsbConOut`
+   (pointer STO), `KeyReads`, `ConsoleOut`. Self-test menulis ke PC lewat
+   **pointer STO itu langsung** (bukan `gST->ConOut`), jadi jalur tampilan
+   GOP/HII sama sekali tidak tersentuh; baris status diperbarui dengan `\r`.
+
+#### Mode ConOut: mengapa 200x60
+
+`QueryMode` melaporkan satu mode (0) berukuran 200x60. Perangkat Display sudah
+lebih dulu masuk daftar, dan ConSplitter **tidak** meng-interseksi mode 0 dan 1
+(keduanya dicadangkan UEFI: 80x25 dan 80x50), jadi mode layar tidak berubah.
+`PcdConOutColumn/Row` (default 80/25) membuat `PreferMode = 0` sehingga tidak ada
+`SetMode` per-perangkat yang dijalankan. Mode besar dilaporkan agar agregat tidak
+menyusut.
+
+#### Uji (tanpa shell/ESP)
+
+```
+modprobe cdc_acm
+lsusb                         # 04e8:2143
+sudo picocom /dev/ttyACM0 -b 115200
+```
+
+Lalu ketik di PC. Bukti di terminal PC:
+
+```
+Key: (not yet)   rx=0 tx=23822 co=398812 kr=0
+Key: Scan=0x0000 Uni=0x0064   rx=111 tx=97685 co=117791 kr=111
+Key: Scan=0x0000 Uni=0x0061   rx=134 tx=173435 co=193518 kr=134
+```
+
+##### Verifikasi: SUKSES (M3 selesai)
+
+- **Output:** `co` (`OutputString`) dan `tx` (byte keluar lewat USB) naik, dan
+  baris self-test muncul di terminal PC. `co` jauh lebih besar dari `tx` karena
+  ring dibuang saat penuh sebelum PC membaca — normal.
+- **Input:** `rx` naik dan **`kr` mengikutinya** (bayt PC benar-benar dibaca UEFI
+  sebagai tombol); huruf ter-decode benar (`0x64`='d', `0x61`='a').
+- **Layar:** self-test tetap utuh dan baris `Key :` di layar menunjukkan angka
+  yang sama dengan di PC — membuktikan `gST->ConIn` agregat mengalirkan keypress
+  USB **dan** registrasi ConOut tidak merusak jalur tampilan.
+
+Catatan: alat bantu monitor serial stdlib disertakan di
+`tools_serial_monitor.py`:
+
+```
+sudo python3 tools_serial_monitor.py /dev/ttyACM0 115200
+```
+
+Keluar dengan Ctrl-] (atau cabut kabel USB — port terputus akan mengakhiri
+monitor). Karena `/dev/ttyACM0` milik `root:uucp`, jalankan dengan `sudo` atau
+tambahkan user ke grup `uucp` (`sudo usermod -aG uucp $USER`, lalu login ulang).
 
 ---
 

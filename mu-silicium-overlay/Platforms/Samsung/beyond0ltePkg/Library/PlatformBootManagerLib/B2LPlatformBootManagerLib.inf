@@ -27,6 +27,7 @@
   IoLib
   MemoryAllocationHelperLib
   UefiLib
+  UefiBootManagerLib
   UefiBootServicesTableLib
   MemoryAllocationLib
   PrintLib

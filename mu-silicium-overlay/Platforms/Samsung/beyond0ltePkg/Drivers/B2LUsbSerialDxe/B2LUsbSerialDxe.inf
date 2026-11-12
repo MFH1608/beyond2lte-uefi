@@ -30,6 +30,9 @@
 
 [Protocols]
   gEfiUsbFunctionIoProtocolGuid
+  gEfiSimpleTextInProtocolGuid
+  gEfiSimpleTextOutProtocolGuid
+  gEfiDevicePathProtocolGuid
 
 [Depex]
   gEfiUsbFunctionIoProtocolGuid
