@@ -618,7 +618,35 @@ Bundle tata letak baru: `uefi-boot.tar` SHA-256
 `Mu-beyond0lte.img` SHA-256
 `1465739896e681c9ee61b409fc2a84194c6edfa45d25892c637b177c5c90c3b2`
 (zip `11a26d6253a8bdea5d4efb5373f1d897335ff5f787aee9b85bace711a199a07e`).
-**Status: sentuh terverifikasi; tata letak dirapikan.**
+
+##### Verifikasi penuh: koordinat sampai ke `GetState`
+
+Setelah tata letak dirapikan, seluruh baris terlihat dan jalur koordinat
+terbukti utuh:
+
+| Baris | Hasil | Arti |
+| --- | --- | --- |
+| `Touch` | `X=3844 Y=2256 Z=32 btn=0x1` | koordinat + tombol aktif sampai ke `GetState` |
+| `Touch.dx` | `st=Success poll=4730 hit=2368` | separuh poll mengembalikan state |
+| `Touch.raw` | `84 F0 8D 40 08 08 20 00` | `MOVE`, `X=0xF04=3844`, `Y=0x8D0=2256` — cocok |
+
+Jadi sentuh bukan cuma "event terbaca", tetapi koordinat benar-benar
+diteruskan sebagai `EFI_ABSOLUTE_POINTER_STATE`.
+
+Satu cacat logika kecil ikut ketahuan: saat **tidak** disentuh,
+`Touch.dx st` sempat menampilkan `Device Error`. Penyebabnya `EFI_ERROR`
+juga menganggap `EFI_NOT_READY` sebagai error, sehingga kondisi "FIFO
+kosong / poll ditunda" salah dilabeli. Perbaikan di `TouchGetState`:
+hanya kode error selain `EFI_NOT_READY` yang dipetakan ke `EFI_DEVICE_ERROR`;
+sisanya `EFI_NOT_READY` (nilai benar saat diam). Setelah flash, saat tidak
+disentuh `Touch.dx st` harus `Not Ready`, bukan `Device Error`.
+
+Bundle final: `uefi-boot.tar` SHA-256
+`4f73b397e24801fa1d20c02aaccd3171da34e42b698c32b194d236169e6dca58`,
+`Mu-beyond0lte.img` SHA-256
+`bc1303dfb1c7fe3695b9aa5219b528da2f6032bdc5d4c2b2efaee88f795db38c`
+(zip `f981ffc85a1343a62acd42b72a0c096e0db1498ef699ce8cbae9807792249060`).
+**Status: sentuh terverifikasi penuh.**
 
 ---
 

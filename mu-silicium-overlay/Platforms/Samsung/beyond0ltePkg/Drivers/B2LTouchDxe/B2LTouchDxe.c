@@ -602,9 +602,15 @@ TouchGetState (
     if (QueueIsEmpty (&mTouch)) {
       //
       // EFI_NOT_READY = okuma basarili ama FIFO bos (dokunma yok / panel
-      // taramiyor); EFI_DEVICE_ERROR = I2C okumasi basarisiz.
+      // taramiyor); EFI_DEVICE_ERROR = gercek I2C hatasi. EFI_NOT_READY de
+      // makro acisindan "error" sayildigi icin ayri ayirmak zorunlu; aksi
+      // halde dokunulmadigi her karede yanlislikla Device Error donuyordu.
       //
-      return EFI_ERROR (Status) ? EFI_DEVICE_ERROR : EFI_NOT_READY;
+      if (EFI_ERROR (Status) && (Status != EFI_NOT_READY)) {
+        return EFI_DEVICE_ERROR;
+      }
+
+      return EFI_NOT_READY;
     }
   }
 
