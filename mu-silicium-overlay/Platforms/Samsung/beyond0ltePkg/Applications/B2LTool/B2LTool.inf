@@ -1,0 +1,47 @@
+## @file
+#  B2LTool - beyond0lte UEFI arac seti (bkz. B2LTool.c).
+#
+#  GPT dokumu (salt okuma), MISC BCB yazip TWRP'ye reset, imaj yazma ve
+#  menusu. FDF'ye EKLENIR (DXE.inc), cunku BDS hem boot option olarak
+#  cagirir hem de "no OS" aninda UnableToBoot icinden baslatir.
+#
+#  FILE_GUID, B2LTool.h icindeki B2L_TOOL_FILE_GUID ve
+#  B2LPlatformBootManagerLib.c icindeki kopyayla AYNI kalmak zorundadir.
+##
+
+[Defines]
+  INF_VERSION                    = 0x00010005
+  BASE_NAME                      = B2LTool
+  FILE_GUID                      = C7E1A2B3-4D5F-4061-8A92-3B4C5D6E7F80
+  MODULE_TYPE                    = UEFI_APPLICATION
+  VERSION_STRING                 = 1.0
+  ENTRY_POINT                    = B2LToolEntry
+
+[Sources]
+  B2LTool.c
+  B2LGpt.c
+  B2LFlash.c
+  B2LTool.h
+
+[Packages]
+  MdePkg/MdePkg.dec
+
+[LibraryClasses]
+  BaseLib
+  BaseMemoryLib
+  IoLib
+  MemoryAllocationLib
+  PrintLib
+  UefiApplicationEntryPoint
+  UefiBootServicesTableLib
+  UefiLib
+  UefiRuntimeServicesTableLib
+
+[Protocols]
+  gEfiBlockIoProtocolGuid
+  gEfiLoadedImageProtocolGuid
+  gEfiShellParametersProtocolGuid
+  gEfiSimpleFileSystemProtocolGuid
+
+[Guids]
+  gEfiFileInfoGuid

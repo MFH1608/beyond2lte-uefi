@@ -40,6 +40,7 @@
 #include <Protocol/DevicePath.h>
 #include <Protocol/UsbFunctionIo.h>
 #include <Protocol/FirmwareVolume2.h>
+#include <Protocol/LoadedImage.h>
 
 //
 // S10e'de son DRAM banki 0x980000000'da bitiyor (0x80000000..0x100000000 +
@@ -168,6 +169,16 @@ STATIC CONST EFI_GUID  mB2LUsbDiagGuid = B2L_USB_SERIAL_DIAG_PROTOCOL_GUID;
 //
 #define B2L_USB_SERIAL_CONSOLE_GUID \
   { 0x6d2b8f41, 0x3c7a, 0x4e19, { 0x8a, 0xd5, 0x2b, 0x90, 0x4c, 0x6f, 0x13, 0xe7 } }
+
+//
+// B2LTool'un FV dosya GUID'i. B2LTool.h icindeki B2L_TOOL_FILE_GUID ve
+// B2LTool.inf icindeki FILE_GUID ile AYNI kalmak zorundadir (bkz.
+// Applications/B2LTool).
+//
+#define B2L_TOOL_FILE_GUID \
+  { 0xC7E1A2B3, 0x4D5F, 0x4061, { 0x8A, 0x92, 0x3B, 0x4C, 0x5D, 0x6E, 0x7F, 0x80 } }
+
+STATIC CONST EFI_GUID  mB2LToolGuid = B2L_TOOL_FILE_GUID;
 
 STATIC CONST struct {
   VENDOR_DEVICE_PATH       Vendor;
@@ -1255,6 +1266,190 @@ B2LRegisterShellBootOption (
   return Status;
 }
 
+/**
+  Verilen FV dosya GUID'i icin Fv(...)/FvFile(guid) cihaz yolunu kurar.
+  B2LRegisterShellBootOption ile ayni mantik; GUID tasiyan FV'yi ReadSection
+  ile dogrular.
+**/
+STATIC
+EFI_DEVICE_PATH_PROTOCOL *
+B2LFvFilePath (
+  IN CONST EFI_GUID  *FileGuid
+  )
+{
+  EFI_STATUS                         Status;
+  EFI_HANDLE                         *FvHandles;
+  UINTN                              FvCount;
+  UINTN                              Index;
+  EFI_FIRMWARE_VOLUME2_PROTOCOL      *Fv;
+  UINT32                             AuthStatus;
+  VOID                               *Buffer;
+  UINTN                              Size;
+  EFI_DEVICE_PATH_PROTOCOL           *FvPath;
+  EFI_DEVICE_PATH_PROTOCOL           *Path;
+  MEDIA_FW_VOL_FILEPATH_DEVICE_PATH  FileNode;
+
+  FvHandles = NULL;
+  FvCount   = 0;
+  FvPath    = NULL;
+  Path      = NULL;
+
+  Status = gBS->LocateHandleBuffer (
+                  ByProtocol,
+                  &gEfiFirmwareVolume2ProtocolGuid,
+                  NULL,
+                  &FvCount,
+                  &FvHandles
+                  );
+  if (EFI_ERROR (Status)) {
+    return NULL;
+  }
+
+  for (Index = 0; Index < FvCount; Index++) {
+    Status = gBS->HandleProtocol (
+                    FvHandles[Index],
+                    &gEfiFirmwareVolume2ProtocolGuid,
+                    (VOID **)&Fv
+                    );
+    if (EFI_ERROR (Status)) {
+      continue;
+    }
+
+    Buffer = NULL;
+    Size   = 0;
+    Status = Fv->ReadSection (
+                  Fv,
+                  (EFI_GUID *)(VOID *)FileGuid,
+                  EFI_SECTION_PE32,
+                  0,
+                  &Buffer,
+                  &Size,
+                  &AuthStatus
+                  );
+    if (Buffer != NULL) {
+      FreePool (Buffer);
+    }
+
+    if (!EFI_ERROR (Status)) {
+      FvPath = DevicePathFromHandle (FvHandles[Index]);
+      break;
+    }
+  }
+
+  FreePool (FvHandles);
+
+  if (FvPath == NULL) {
+    return NULL;
+  }
+
+  EfiInitializeFwVolDevicepathNode (&FileNode, (EFI_GUID *)(VOID *)FileGuid);
+  Path = AppendDevicePathNode (FvPath, (EFI_DEVICE_PATH_PROTOCOL *)&FileNode);
+  return Path;
+}
+
+/**
+  Bir FV uygulamasini boot option olarak kaydet (idempotent). Ayni
+  (FilePath, Description) zaten varsa eklenmez; yoksa BootOrder'in SONUNA
+  eklenir (normal BOOT seceneklerinden sonra).
+**/
+STATIC
+EFI_STATUS
+B2LRegisterFvApp (
+  IN CONST EFI_GUID  *FileGuid,
+  IN CONST CHAR16    *Description,
+  IN VOID            *OptionalData,
+  IN UINTN            OptionalDataSize
+  )
+{
+  EFI_STATUS                    Status;
+  EFI_DEVICE_PATH_PROTOCOL      *Path;
+  EFI_BOOT_MANAGER_LOAD_OPTION  Option;
+  EFI_BOOT_MANAGER_LOAD_OPTION  *Existing;
+  UINTN                         ExistingCount;
+
+  Path = B2LFvFilePath (FileGuid);
+  if (Path == NULL) {
+    return EFI_NOT_FOUND;
+  }
+
+  Status = EfiBootManagerInitializeLoadOption (
+             &Option,
+             LoadOptionNumberUnassigned,
+             LoadOptionTypeBoot,
+             LOAD_OPTION_ACTIVE | LOAD_OPTION_CATEGORY_APP,
+             (CHAR16 *)(VOID *)Description,
+             Path,
+             OptionalData,
+             OptionalDataSize
+             );
+  FreePool (Path);
+
+  if (EFI_ERROR (Status)) {
+    return Status;
+  }
+
+  Existing = EfiBootManagerGetLoadOptions (&ExistingCount, LoadOptionTypeBoot);
+  if ((Existing != NULL) &&
+      (EfiBootManagerFindLoadOption (&Option, Existing, ExistingCount) != -1))
+  {
+    EfiBootManagerFreeLoadOptions (Existing, ExistingCount);
+    EfiBootManagerFreeLoadOption (&Option);
+    return EFI_SUCCESS;
+  }
+
+  if (Existing != NULL) {
+    EfiBootManagerFreeLoadOptions (Existing, ExistingCount);
+  }
+
+  Status = EfiBootManagerAddLoadOptionVariable (&Option, (UINTN)-1);
+  EfiBootManagerFreeLoadOption (&Option);
+  return Status;
+}
+
+/**
+  Bir FV uygulamasini simdi yukle ve baslat (BootOrder'a dokunmaz).
+**/
+STATIC
+EFI_STATUS
+B2LStartFvApp (
+  IN CONST EFI_GUID  *FileGuid
+  )
+{
+  EFI_STATUS                 Status;
+  EFI_DEVICE_PATH_PROTOCOL   *Path;
+  EFI_HANDLE                 Image;
+  EFI_LOADED_IMAGE_PROTOCOL  *Loaded;
+
+  Path = B2LFvFilePath (FileGuid);
+  if (Path == NULL) {
+    return EFI_NOT_FOUND;
+  }
+
+  Image  = NULL;
+  Status = gBS->LoadImage (FALSE, gImageHandle, Path, NULL, 0, &Image);
+  FreePool (Path);
+  if (EFI_ERROR (Status)) {
+    return Status;
+  }
+
+  //
+  // LoadOptions bos birakilir: B2LTool menusu acilir.
+  //
+  Status = gBS->HandleProtocol (
+                  Image,
+                  &gEfiLoadedImageProtocolGuid,
+                  (VOID **)&Loaded
+                  );
+  if (!EFI_ERROR (Status) && (Loaded != NULL)) {
+    Loaded->LoadOptions     = NULL;
+    Loaded->LoadOptionsSize = 0;
+  }
+
+  Status = gBS->StartImage (Image, NULL, NULL);
+  gBS->UnloadImage (Image);
+  return Status;
+}
+
 //
 // DeviceBootManagerLib implements. The rest is the same as the Silicon Null
 // implementation; only UnableToBoot does real work on this device.
@@ -1286,6 +1481,22 @@ DeviceBootManagerBeforeConsole (
   // dogrudan interaktif olur.
   //
   B2LRegisterShellBootOption ();
+
+  //
+  // B2LTool'u da boot option olarak kaydet. Kategori APP oldugu icin BDS
+  // normal boot dongusunde ATLAR (bkz. BdsDxe/BdsEntry.c); yani cihaz
+  // kendiliginden araca girmez. Kullanici yalnizca boot menusunden secer
+  // ya da asagidaki UnableToBoot yolu cagirir.
+  //
+  B2LRegisterFvApp (&mB2LToolGuid, L"beyond0lte Tools", NULL, 0);
+
+  //
+  // Dogrudan TWRP'ye gecen ikinci boot option: ayni B2LTool, fakat
+  // OptionalData = "recov". Secilince B2LTool PMU INFORM3'e recovery
+  // reboot-reason'i yazip SWRESET atar; S-Boot TWRP'yi acar (bkz.
+  // Applications/B2LTool). boylece menusuz tek secimle recovery.
+  //
+  B2LRegisterFvApp (&mB2LToolGuid, L"TWRP (recovery)", L"recov", sizeof (L"recov"));
 
   return NULL;
 }
@@ -1332,6 +1543,13 @@ DeviceBootManagerUnableToBoot (
   VOID
   )
 {
+  //
+  // Once B2LTool menusunu ac. Kullanici TWRP'ye gecmek ya da imaj yazmak
+  // icin buradan secebilir. Arac donerse (kullanici cikti) eski teshis
+  // ekranina dusuyoruz; davranis boylece geriye uyumlu kaliyor.
+  //
+  B2LStartFvApp (&mB2LToolGuid);
+
   B2LSelfTest ();
 }
 

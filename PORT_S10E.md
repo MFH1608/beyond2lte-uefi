@@ -1560,6 +1560,175 @@ bersama.
 
 ---
 
+### 6.10 B2LTool: alat UEFI serbaguna (Faz 1+2+3)
+
+S10e di port ini tidak punya keyboard huruf dan belum punya ESP (FAT),
+sehingga EFI Shell praktis tidak bisa dipakai: `map -r` hanya memunculkan
+`BLK*`, tidak ada `FS*`, jadi `fs0:` tidak pernah ada. Akibatnya semua
+operasi tingkat partisi (lihat GPT, tulis imaj) sulit dilakukan.
+
+`B2LTool` mengisi celah itu: satu aplikasi UEFI yang **ditanam di FV**
+(sehingga selalu ada, tanpa ESP) dan dijalankan dari tiga pintu: menu
+otomatis saat "no OS", boot option BDS, atau Shell.
+
+#### Subperintah
+
+```
+B2LTool.efi part                 -> cetak nama + LBA + ukuran tiap partisi (read-only)
+B2LTool.efi recov                -> tulis reboot-reason PMU, lalu reset (TWRP)  [lihat 6.11]
+B2LTool.efi clear                -> nolkan BCB di MISC + INFORM3 di PMU
+B2LTool.efi pmu                  -> cetak RSTSTAT + INFORM0..7 (read-only)
+B2LTool.efi flash <file> <part>  -> tulis .img / .img.tar ke partisi, lalu verifikasi
+B2LTool.efi                      -> buka menu di layar
+```
+
+Urutan argumen diambil dari `EFI_SHELL_PARAMETERS_PROTOCOL` bila dijalankan
+dari Shell, atau dari `EFI_LOADED_IMAGE_PROTOCOL.LoadOptions` bila
+dijalankan sebagai boot option (itulah peran `OptionalData`). Tanpa argumen
+sama sekali → menu.
+
+#### Menu (8 item; jadi pengganti layar "no OS" yang dulu langsung mematikan)
+
+```
+[1] Dump GPT (read-only)
+[2] Reboot to recovery (TWRP)
+[3] Clear BCB + reboot reason
+[4] Flash image (ESP to partition)
+[5] Dump PMU reboot reason
+[6] Reboot
+[7] Power off
+[0] Exit (self-test screen)
+```
+
+`[4]` interaktif: memilih berkas `.img`/`.img.tar` di root volume lalu
+partisi tujuan. `[0]` jatuh ke layar SELF TEST lama (§6.2) agar perilaku
+"no OS" yang sudah teruji tetap bisa dipanggil.
+
+#### Yang ditambahkan
+
+```
+mu-silicium-overlay/Platforms/Samsung/beyond0ltePkg/Applications/B2LTool/
+  B2LTool.c        giris + menu + komut (part/recov/clear/pmu)
+  B2LGpt.c         pemindai GPT per-LUN (block size dihormati, read-only)
+  B2LFlash.c       penulis imaj + verifikasi + pencari IRS di dalam .tar
+  B2LTool.h        definisi bersama (GUID, ukuran, makro PMU)
+  B2LTool.inf      UEFI_APPLICATION
+```
+
+Integrasi:
+
+- `Include/DXE.inc` + `beyond0lte.dsc` menambahkan `B2LTool.inf` ke build
+  (`UEFI_APPLICATION` tidak memengaruhi urutan dispatch DXE).
+- `B2LPlatformBootManagerLib.inf` menambah `gEfiLoadedImageProtocolGuid`.
+- `B2LPlatformBootManager.c` menambah dua helper:
+  - `B2LFvFilePath()` — menyusun jalur `Fv(...)/FvFile(guid)`, memverifikasi
+    FV benar-benar memuat GUID itu lewat `ReadSection`;
+  - `B2LRegisterFvApp()` — mendaftarkan boot option secara idempoten
+    (kalau pasangan description+path sudah ada, tidak digandakan).
+- `yap.sh` menyalin `B2LTool.efi` hasil build ke `out/` dan `esp/B2LTOOL.EFI`
+  supaya bisa juga dijalankan dari Shell/ESP.
+
+#### Dua boot option BDS
+
+`DeviceBootManagerBeforeConsole()` mendaftarkan dua entri:
+
+| Judul | OptionalData | Perilaku bila dipilih |
+|---|---|---|
+| `beyond0lte Tools` | — | buka **menu** B2LTool |
+| `TWRP (recovery)` | `recov` | langsung pemicu recovery (tanpa menu) |
+
+Keduanya berkategori **APP**, jadi BDS melewatinya pada boot normal; ia
+hanya jalan bila dipilih dari menu boot.
+
+`DeviceBootManagerUnableToBoot()` sekarang **mencoba membuka menu B2LTool
+lebih dulu** (`B2LStartFvApp`); bila pengguna keluar, barulah jatuh ke layar
+SELF TEST lama. Jadi alur "no OS" sekarang: menu alat → (opsional) TWRP /
+flash → self-test → mati.
+
+### 6.11 Pemicu recovery tanpa tombol: PMU INFORM3
+
+#### Masalah
+
+Tombol power fisik unit ini mati, sehingga kombo Samsung
+`Vol Up + Bixby + Power` untuk masuk RECOVERY mustahil. Kita perlu cara
+perangkat lunak untuk memerintahkan S-Boot membuka RECOVERY (TWRP).
+
+#### Hasil reverse `sboot.bin` (G970FXXUHHXJ1)
+
+Dua temuan yang saling mengunci:
+
+1. **S-Boot tidak memakai BCB AOSP.** Tidak ada literal `boot-recovery`
+   maupun `bootonce` di `sboot.bin`. Menulis `"boot-recovery"` ke MISC
+   (dugaan awal) **diabaikan**.
+2. **Modus boot dipilih dari register PMU.** Sebuah fungsi dump
+   (`0xb7038`) menamai register PMU (base `0x15860000`):
+
+   ```
+   0x404 RSTSTAT   0x800 INFORM0   0x804 INFORM1   0x808 INFORM2
+   0x80C INFORM3   0x840 INFORM4   0x844 INFORM5   0x84C INFORM7
+   ```
+
+   Parser boot-mode (`0xac430`, dipanggil saat init boot dari `0xa77d4`)
+   membaca 32-bit dari **`0x1586080C` (= INFORM3)** dan menerjemahkannya:
+
+   | Nilai INFORM3 | Aksi S-Boot |
+   |---|---|
+   | `0x12345670 \| n` | `set REBOOT_MODE = n` |
+   | `0xABCD0000` | `DEBUG_LEVEL` |
+   | `0xABC80000` | `DUMPSINK` |
+   | **`0xABC30000`** | **"set recovery mode for boot." → RECOVERY** |
+   | `0xABCE0000` | `SWITCH_SEL` |
+   | `0xABCF0000` | `SUD` |
+   | `0xA5600000` | MULTI-CMD |
+
+   Setelah dibaca, register langsung di-`str wzr` → ini **mailbox satu kali**;
+   karena itu nilainya harus ditulis **sebelum** reset.
+
+Jadi `0xABC30000` ke INFORM3 inilah "offset/nilai" yang dipakai S-Boot untuk
+memilih RECOVERY.
+
+#### Implementasi
+
+`B2LDoRecov()` (di `Applications/B2LTool/B2LTool.c`):
+
+1. baca `RSTSTAT` (0x404) dan `INFORM3` (0x80C) lalu cetak,
+2. `MmioWrite32 (0x1586080C, 0xABC30000)`,
+3. baca balik (readback) dan cetak; kalau beda, cetak `WARN` tapi tetap lanjut,
+4. `gRT->ResetSystem (EfiResetWarm, ...)` — di platform ini `Warm`/`Cold`
+   sama-sama menuju `SWRESET` (`ResetSystemLib`, §6.9), dan nilai INFORM3
+   bertahan melewati SWRESET.
+
+`clear` juga menolkan INFORM3 (membatalkan recovery yang tertunda), dan
+subperintah `pmu` mencetak seluruh register reboot-reason (read-only) untuk
+diagnosa. Konstanta PMU (`B2L_PMU_*`) sengaja disalin ke `B2LTool.c` supaya
+aplikasi ini tidak bergantung pada header level SoC.
+
+`gBS->Stall()` diberi jeda pendek sebelum reset agar teks diagnostik
+terkirim penuh ke konsol USB.
+
+#### Verifikasi: SUKSES (di perangkat)
+
+- Dari menu B2LTool **`[2] Reboot to recovery (TWRP)`** → perangkat
+  **reboot dan masuk TWRP tanpa tombol apa pun**. Tidak perlu `Vol Up +
+  Bixby + Power`.
+- Ini juga memvalidasi entri boot BDS **`TWRP (recovery)`** (jalur kode
+  yang sama, `OptionalData = "recov"`) dan jalur Shell
+  `B2LTool.efi recov`.
+
+#### Bundel flash (6.10 + 6.11)
+
+```
+~/Downloads/beyond0lte-flash/
+  uefi-boot.tar        sha256 3a652456d3421f774ae106388031c3c8da8caf8042bb113b6a8122930ddc5042
+  Mu-beyond0lte.img    sha256 5be28b02d46ce8b53f91b8e5be227f98ab31f0f815824c786890cb4a16a65637
+  (B2LTOOL.EFI di esp) sha256 1766bf51317832b21f779ab306dee19363c3318bcfb84ed34c6597c33537fd57
+```
+
+`uefi-boot.tar` di-flash lewat Odin slot AP (**Re-Partition JANGAN**);
+UEFI masuk partisi BOOT, `sboot` tidak disentuh (rollback §7 tetap aman).
+
+---
+
 ## 7. Rollback
 
 Sama seperti BUILD.md §8. UEFI ditulis ke partisi **BOOT**, bukan ke `sboot`,

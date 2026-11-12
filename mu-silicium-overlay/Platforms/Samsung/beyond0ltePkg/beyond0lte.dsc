@@ -179,6 +179,12 @@
   # UEFI olaylariyla canlilik/ExitBootServices siniri gosteren uygulama.
   # Fiziksel tani kayitlarina veya ayrilmis RAM'e erismez.
   beyond0ltePkg/Applications/B2LBootTani/B2LBootTani.inf
+  #
+  # B2LTool - GPT dokumu, MISC BCB ile TWRP'ye giris, imaj yazma ve menu.
+  # FDF'ye de eklenir (DXE.inc): BDS onu boot option olarak ve
+  # UnableToBoot icinden baslatir.
+  #
+  beyond0ltePkg/Applications/B2LTool/B2LTool.inf
   beyond0ltePkg/Drivers/B2LRtHookDxe/B2LRtHookDxe.inf
   beyond0ltePkg/Drivers/B2LSehDxe/B2LSehDxe.inf
   beyond0ltePkg/Drivers/B2LGicSusDxe/B2LGicSusDxe.inf

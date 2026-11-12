@@ -132,6 +132,13 @@
 
   INF ShellPkg/Application/Shell/Shell.inf
 
+  #
+  # B2LTool - GPT dokumu, MISC BCB ile TWRP'ye giris ve imaj yazma.
+  # UEFI_APPLICATION oldugu icin DXE dispatch'i etkilemez; hem BDS boot
+  # option'i hem UnableToBoot bunu FV'den yukler.
+  #
+  INF beyond0ltePkg/Applications/B2LTool/B2LTool.inf
+
 !if $(USE_CUSTOM_DISPLAY_DRIVER) == 0
   INF SiliciumPkg/Drivers/SimpleFbDxe/SimpleFbDxe.inf
 !endif

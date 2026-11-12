@@ -359,6 +359,19 @@ if [ -n "$GOS" ]; then
 fi
 
 #
+# B2LTool.efi - GPT dokumu, MISC BCB ile TWRP'ye giris ve imaj yazma.
+# FV'ye gomulur (DXE.inc) ve BDS'te boot option olur. Ayrica esp/ icine de
+# konuyor: Shell'den "fs0:\B2LTOOL.EFI part" gibi dogrudan calistirilabilsin.
+#
+TOOL="$(find "$MU/Build" -name 'B2LTool.efi' 2>/dev/null | head -1)"
+if [ -n "$TOOL" ]; then
+  mkdir -p "$PROJ/out"
+  cp -f "$TOOL" "$PROJ/out/B2LTool.efi"
+  cp -f "$TOOL" "$PROJ/esp/B2LTOOL.EFI"
+  echo "B2LTool hazir: esp/B2LTOOL.EFI"
+fi
+
+#
 # B2LBootTani.efi - bootmgfw'nin kalici bekleme noktasini, ayrilmis RAM veya
 # MMIO okumadan GOP ustundeki bir nabizla ayirir. Yalnizca
 # `cache_esp.sh --win --system --boot-tani` yolunda calistirilir.
