@@ -33,6 +33,7 @@
 #include <Protocol/HiiFont.h>
 #include <Protocol/SimpleFileSystem.h>
 #include <Protocol/SimpleTextIn.h>
+#include <Protocol/UsbFunctionIo.h>
 
 //
 // S10e'de son DRAM banki 0x980000000'da bitiyor (0x80000000..0x100000000 +
@@ -153,8 +154,11 @@ STATIC CONST EFI_GUID  mB2LTouchDiagGuid = B2L_TOUCH_DIAG_PROTOCOL_GUID;
 #define B2L_USB_USBCON_CLKRST   0x20      // CLKRST
 #define B2L_USB_DWC3_BASE       0x10C00000ULL   // usb@10C00000 (dwc3)
 #define B2L_USB_DWC3_SIZE       0x10000   // usb node reg uzunlugu (64 KiB)
-#define B2L_USB_DWC3_GSNPSID    0xC120    // Synopsys kimlik (0x5533xxxx)
+#define B2L_USB_DWC3_GSNPSID    0xC120    // Synopsys kimlik (0x5533xxxx / 0x3331xxxx)
 #define B2L_USB_DWC3_GCTL       0xC110    // PRTCAPDIR burada
+#define B2L_USB_DWC3_GUSB2PHYCFG 0xC200    // UTMI+ arayuz / turnaround
+#define B2L_USB_DWC3_DCTL       0xC704    // Device Control (RUN_STOP vb.)
+#define B2L_USB_DWC3_DSTS       0xC70C    // Device Status (hiz, halt)
 #define B2L_USB_XHCI_CAPLEN     0x00      // xHCI CAPLENGTH(8) | HCIVERSION(16)
 #define B2L_USB_XHCI_HCSPARAMS1 0x04      // xHCI HCSPARAMS1
 
@@ -173,6 +177,31 @@ STATIC B2L_USB_PROBE  mUsb;
 STATIC EFI_STATUS     mUsbConMap;
 STATIC EFI_STATUS     mUsbDwc3Map;
 STATIC BOOLEAN        mUsbValid;
+
+//
+// ================= Device-mode bring-up denemesi (M1) =================
+//
+// UsbfnDwc3Dxe (SamsungPkg) yalnizca EFI_USBFN_IO_PROTOCOL yayinlar; PHY ve
+// controller ancak bir sinif surucusu StartController'i cagirinca acilir.
+// Sinif surucusu (gadget) henuz yok (M2 = CDC-ACM). Bu blok, S5E9820Pkg
+// PlatformUsbfnLib'in (USBCON 0x10B00000 + DWC3 0x10C00000) bring-up'ini
+// dogrulamak icin StartController'i DOGRUDAN cagirir ve sonucu ekrana basar.
+//
+// Not: StartController sonrasi cihaz PC'ye baglanmaz; baglanma icin
+// ConfigureEnableEndpoints (RUN_STOP) gerekir ki o M2'dedir. Burada amac
+// PHY/core zincirinin calistigini gormek: st=Success ve GCTL/DCTL/DSTS
+// makul olmali.
+//
+typedef struct {
+  EFI_STATUS  LocateStatus;
+  EFI_STATUS  StartStatus;
+  UINT32      Gctl;
+  UINT32      Dctl;
+  UINT32      Dsts;
+  BOOLEAN     Present;
+} B2L_USB_DEV;
+
+STATIC B2L_USB_DEV  mUsbDev;
 
 STATIC EFI_GRAPHICS_OUTPUT_PROTOCOL  *mUiGop;
 STATIC EFI_HII_FONT_PROTOCOL         *mUiFont;
@@ -385,7 +414,8 @@ B2LDrawUsb (
   B2LUiPrint (B2L_UI_GRI, L"USB.pmu : %08x %08x", mUsb.PmuPhy, mUsb.PmuPhyDp);
   B2LUiPrint (B2L_UI_GRI, L"USB.con : %08x %08x", mUsb.UsbconVer, mUsb.UsbconClkrst);
   B2LUiPrint (
-    ((mUsb.SnpsId & 0xFFFF0000U) == 0x55330000U) ? B2L_UI_YESIL : B2L_UI_GRI,
+    (((mUsb.SnpsId & 0xFFFF0000U) == 0x55330000U) ||
+     ((mUsb.SnpsId & 0xFFFF0000U) == 0x33310000U)) ? B2L_UI_YESIL : B2L_UI_GRI,
     L"USB.dw3 : %08x %08x",
     mUsb.SnpsId,
     mUsb.Gctl
@@ -395,6 +425,78 @@ B2LDrawUsb (
     L"USB.xhc : %08x %08x",
     mUsb.XhciCapLen,
     mUsb.XhciParams1
+    );
+}
+
+/**
+  UsbfnDwc3Dxe protokolunu bul, StartController'i cagir (PHY + core
+  bring-up), sonra DWC3 durum registerlarini oku. Statik bolumde bir kez.
+**/
+STATIC
+VOID
+B2LUsbDevBringUp (
+  VOID
+  )
+{
+  EFI_USBFN_IO_PROTOCOL  *Fn;
+
+  mUsbDev.Present = FALSE;
+  mUsbDev.Gctl    = 0;
+  mUsbDev.Dctl    = 0;
+  mUsbDev.Dsts    = 0;
+  Fn              = NULL;
+
+  mUsbDev.LocateStatus = gBS->LocateProtocol (
+                                (EFI_GUID *)(VOID *)&gEfiUsbFunctionIoProtocolGuid,
+                                NULL,
+                                (VOID **)&Fn
+                                );
+  if (EFI_ERROR (mUsbDev.LocateStatus) || (Fn == NULL) ||
+      (Fn->StartController == NULL))
+  {
+    return;
+  }
+
+  mUsbDev.Present     = TRUE;
+  mUsbDev.StartStatus = Fn->StartController (Fn);
+
+  //
+  // MMIO bu noktada B2LUsbRead tarafindan da haritalanmistir; okuma guvenli.
+  //
+  mUsbDev.Gctl = MmioRead32 ((UINTN)(B2L_USB_DWC3_BASE + B2L_USB_DWC3_GCTL));
+  mUsbDev.Dctl = MmioRead32 ((UINTN)(B2L_USB_DWC3_BASE + B2L_USB_DWC3_DCTL));
+  mUsbDev.Dsts = MmioRead32 ((UINTN)(B2L_USB_DWC3_BASE + B2L_USB_DWC3_DSTS));
+}
+
+/**
+  Device-mode bring-up sonucunu bas.
+**/
+STATIC
+VOID
+B2LDrawUsbDev (
+  VOID
+  )
+{
+  if (!mUsbDev.Present) {
+    B2LUiPrint (
+      B2L_UI_GRI,
+      L"USB.dev : no UsbFnIo (%r)",
+      mUsbDev.LocateStatus
+      );
+    return;
+  }
+
+  B2LUiPrint (
+    EFI_ERROR (mUsbDev.StartStatus) ? B2L_UI_KIRMIZI : B2L_UI_YESIL,
+    L"USB.dev : st=%r",
+    mUsbDev.StartStatus
+    );
+  B2LUiPrint (
+    B2L_UI_GRI,
+    L"USB.ctl : %08x %08x %08x",
+    mUsbDev.Gctl,
+    mUsbDev.Dctl,
+    mUsbDev.Dsts
     );
 }
 
@@ -650,6 +752,8 @@ B2LSelfTest (
   B2LDrawDevices ();
   B2LUsbRead ();
   B2LDrawUsb ();
+  B2LUsbDevBringUp ();
+  B2LDrawUsbDev ();
 
   //
   // Surucu teshis protokolu. Once bunu arariz: hem entry asamasini gosterir

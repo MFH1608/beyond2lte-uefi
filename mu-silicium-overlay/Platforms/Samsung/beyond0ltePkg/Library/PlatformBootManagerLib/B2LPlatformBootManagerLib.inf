@@ -36,3 +36,4 @@
   gEfiAbsolutePointerProtocolGuid
   gEfiGraphicsOutputProtocolGuid
   gEfiSimpleFileSystemProtocolGuid
+  gEfiUsbFunctionIoProtocolGuid

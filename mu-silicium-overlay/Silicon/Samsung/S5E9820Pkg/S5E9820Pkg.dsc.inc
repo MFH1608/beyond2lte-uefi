@@ -96,3 +96,10 @@
   # Samsung Libraries
   #
   UsiLib|S5E9820Pkg/Library/UsiLib/UsiLib.inf
+
+  #
+  # USB (device/gadget). SamsungPkg.dsc.inc varsayilan olarak Null verir;
+  # burada Exynos 9820'e ozel DWC3 + combo PHY bring-up'i ile degistirilir.
+  # Ayrinti ve adresler: Library/PlatformUsbfnLib/BoardInit.c
+  #
+  PlatformUsbfnLib|S5E9820Pkg/Library/PlatformUsbfnLib/PlatformUsbfnLib.inf

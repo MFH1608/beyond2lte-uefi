@@ -1,0 +1,27 @@
+[Defines]
+  INF_VERSION                    = 0x00010005
+  BASE_NAME                      = PlatformUsbfnLib
+  FILE_GUID                      = 7E2A5C41-9B3D-4F02-8C1E-5A6D0B7E4F19
+  MODULE_TYPE                    = DXE_DRIVER
+  VERSION_STRING                 = 1.0
+  LIBRARY_CLASS                  = PlatformUsbfnLib|DXE_DRIVER
+
+#
+# S10e (beyond0lte) / Exynos 9820 DWC3 device-mode platform kablolamasi.
+# USBCON 0x10B00000, DWC3 link 0x10C00000 (bkz. BoardInit.c).
+#
+
+[Sources]
+  BoardInit.c
+
+[Packages]
+  MdePkg/MdePkg.dec
+  SiliciumPkg/SiliciumPkg.dec
+  SamsungPkg/SamsungPkg.dec
+
+[LibraryClasses]
+  DebugLib
+  IoLib
+  MemoryAllocationHelperLib
+  TimerLib
+  UefiBootServicesTableLib

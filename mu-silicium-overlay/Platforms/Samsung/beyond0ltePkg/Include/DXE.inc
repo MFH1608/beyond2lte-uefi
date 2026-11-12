@@ -107,6 +107,13 @@
   INF beyond0ltePkg/Drivers/B2LTouchDxe/B2LTouchDxe.inf
   INF SamsungPkg/Drivers/PmicDxe/PmicDxe.inf
 
+  #
+  # DWC3 device-mode controller. PlatformUsbfnLib S5E9820Pkg'de tanimli;
+  # self-test StartController ile PHY/core bring-up'ini dogrular.
+  # (Host/xHCI yolu ayri bir is; bkz. PORT_S10E.md 6.3)
+  #
+  INF SamsungPkg/Drivers/UsbfnDwc3Dxe/UsbfnDwc3Dxe.inf
+
   INF MdeModulePkg/Universal/Disk/DiskIoDxe/DiskIoDxe.inf
   INF MdeModulePkg/Universal/Disk/PartitionDxe/PartitionDxe.inf
 
