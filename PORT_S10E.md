@@ -1719,13 +1719,119 @@ terkirim penuh ke konsol USB.
 
 ```
 ~/Downloads/beyond0lte-flash/
-  uefi-boot.tar        sha256 3a652456d3421f774ae106388031c3c8da8caf8042bb113b6a8122930ddc5042
-  Mu-beyond0lte.img    sha256 5be28b02d46ce8b53f91b8e5be227f98ab31f0f815824c786890cb4a16a65637
-  (B2LTOOL.EFI di esp) sha256 1766bf51317832b21f779ab306dee19363c3318bcfb84ed34c6597c33537fd57
+  uefi-boot.tar        sha256 b5df05362d77e0c3750862645c991dfa037b4a842bb5967cef695028547fb8d1
+  Mu-beyond0lte.img    sha256 e775f221309b4985f3ee2f3dcb44b57c04ff7c92c9d1bf95a45fda09e0a293e5
+  (B2LTOOL.EFI di esp) sha256 534d1cc37d0196cec004dfe9e76adad6810c135a9d8b315eba229f91df701690
 ```
 
 `uefi-boot.tar` di-flash lewat Odin slot AP (**Re-Partition JANGAN**);
 UEFI masuk partisi BOOT, `sboot` tidak disentuh (rollback §7 tetap aman).
+
+> Hash di atas adalah hasil build **setelah** perbaikan parsing argumen
+> (§6.12); versi sebelumnya (`uefi-boot.tar` `3a652456...`) hanya berbeda pada
+> `B2LTool` di dalam FV.
+
+### 6.12 M5a: boot dari ESP di CACHE (`fs0:` + B2LTool dari Shell)
+
+Tujuan M5a: membuktikan bahwa jalur "boot OS dari FAT" (ESP) benar-benar
+hidup di S10e — bukan hanya Shell yang tertanam di FV. Ini pintu masuk untuk
+menaruh kernel/loader di ESP.
+
+#### Cara memunculkannya
+
+1. Tulis ESP ke partisi **CACHE** (`~/Downloads/beyond0lte-esp/cache.img`;
+   lihat §6.13). Dari Odin (`cache-esp.tar`, sparse), heimdall
+   (`--CACHE cache-mini.img`), atau dari TWRP dengan `dd` (§6.13).
+2. Boot, lalu di menu boot pilih **"Internal Storage"**.
+3. `MsBootPolicyLibIsDevicePathBootable()` menerima setiap volume valid,
+   sehingga BDS memilih SimpleFileSystem non-USB → FAT di CACHE.
+4. Shell `\EFI\BOOT\BOOTAA64.EFI` dijalankan **dari ESP**, lalu otomatis
+   menjalankan `startup.nsh` (skrip diagnostik yang memanggil `B2LGOSTR.EFI`).
+
+#### Verifikasi: SUKSES (di perangkat)
+
+Layar muncul: banner `=== BEYOND2LTE TANI ===`, `RAM MB = 0x840`
+(2112 MB ≈ 2 GiB, sesuai peta memori protektif port ini), `RST STAT=20000000
+YAZILIM` (software reset — wajar). Itu bukti `startup.nsh` dari ESP berjalan.
+
+Kemudian di prompt `Shell>`:
+
+```
+map -r
+  FS0: Alias(s):HD0bd:;BLK21:
+      VenHw(5F2C8E91-...)/HD(28,GPT,52444E41-...636865000000)
+```
+
+`HD(28,...)` = partisi **cache** (bandingkan §6.10 / PARTITIONS.md) → **`fs0:`
+ada**. `ls fs0:\` menampilkan `B2LBOOT.EFI`, `B2LGOSTR.EFI`, `B2LTOOL.EFI`,
+`EFI\`, `startup.nsh`.
+
+`fs0:\B2LTool.efi part` mencetak tabel GPT 32 partisi. Nilainya cocok dengan
+PARTITIONS.md, mis. `boot LBA=27264 blocks=14080`, `recovery LBA=41344
+blocks=16512`, `misc LBA=71040 blocks=256`, `cache LBA=1983488 blocks=153600`
+(600 MiB). Selain 31 partisi LUN0, terlihat juga `cpefs` dari LUN lain.
+
+#### Bug yang ditemukan & diperbaiki: parsing argumen `B2LTool`
+
+Percobaan pertama `fs0:\B2LTool.efi part` gagal:
+
+```
+Unknown command: fs0:\B2LTool.efi
+Commands: part | recov | clear | pmu | flash <file> <partition>
+```
+
+Dua sebab di `B2LToolEntry()` (`B2LTool.c`):
+
+1. `EFI_SHELL_PARAMETERS_PROTOCOL` dicari dengan `LocateProtocol()` (handle
+   global), padahal Shell memasangnya di **image handle aplikasi**. Pencarian
+   gagal, argumen jatuh ke jalur lain.
+2. Fallback `EFI_LOADED_IMAGE_PROTOCOL.LoadOptions` memuat **seluruh command
+   line** termasuk nama program, jadi `Tok[0]` = `fs0:\B2LTool.efi`, bukan
+   subkomut.
+
+Perbaikan: (1) `HandleProtocol(ImageHandle, ...)` lebih dulu, baru
+`LocateProtocol` sebagai cadangan; (2) helper `B2LProgramToken()` mendeteksi
+`Tok[0]` yang berisi `\`/`/` atau berakhiran `.EFI` (harf case-insensitive)
+lalu menggeser token. Jalur `OptionalData` BDS (`"recov"`) tidak terpengaruh
+karena `"recov"` bukan nama program.
+
+Setelah flash ulang ESP (B2LTool `534d1cc3...`), `fs0:\B2LTool.efi part`
+langsung bekerja. Karena itu pula FV di `uefi-boot.tar` dibangun ulang agar
+B2LTool di BDS/UnableToBoot memakai kode yang sama.
+
+#### Dampak
+
+- `fs0:` ada → ESP di CACHE resmi dapat dibaca UEFI. Kernel/loader dapat
+  ditaruh di sini (langkah menuju boot OS).
+- B2LTool kini dapat dipakai dari Shell dengan subperintah lengkap
+  (`part`/`recov`/`clear`/`pmu`/`flash`).
+- Membuktikan jalur `LoadOptions` (boot option BDS) dan Shell dua-duanya
+  benar — prasyarat untuk boot option yang membawa `OptionalData`.
+
+### 6.13 Menulis ESP ke CACHE (Odin / heimdall / TWRP)
+
+CACHE = 153600 blok × 4096 = **600 MiB**; `cache.img` kita persis 600 MiB.
+
+| Metode | Perintah | Catatan |
+|---|---|---|
+| Odin | slot AP = `cache-esp.tar` | sparse (~1,2 MB terkirim), paling andal; nama di dalam tar `cache.img` → Odin menulis ke CACHE |
+| heimdall | `heimdall flash --CACHE cache-mini.img` | 32 MB; heimdall rapuh untuk berkas besar |
+| TWRP `dd` | lihat di bawah | tanpa Odin/heimdall, tanpa tombol |
+
+TWRP (paling praktis sekarang karena TWRP bisa dibuka via §6.11):
+
+```sh
+adb push ~/Downloads/beyond0lte-esp/cache.img /sdcard/
+adb shell "ls -l /dev/block/by-name/ | grep -i cache"
+adb shell "umount /cache 2>/dev/null; umount /dev/block/by-name/cache 2>/dev/null"
+adb shell "dd if=/sdcard/cache.img of=/dev/block/by-name/cache bs=4096 conv=fsync"
+adb shell "sync"
+```
+
+Verifikasi cepat: `dd if=/dev/block/by-name/cache bs=512 count=1 | hexdump -C`
+harus menampilkan label `UEFIESP` (offset 43) dan `FAT16`. Lalu
+**Reboot → System**. CACHE hanya berisi cache Android; system/data tak
+tersentuh, rollback §7 tetap berlaku.
 
 ---
 

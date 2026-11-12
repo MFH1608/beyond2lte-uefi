@@ -719,6 +719,49 @@ B2LTokenize (
   *TokCount = N;
 }
 
+//
+// Bir token program adi mi? Shell, LoadOptions'a komut satirinin TAMAMINI
+// koyar: argv[0] (programin yolu) + argumanlar. Ornegin
+//   "fs0:\B2LTool.efi part"  veya  "B2LTOOL.EFI part"
+// Bu token'i ayiklamazsak subkomut yerine program adi Tok[0] olur ve
+// "Unknown command: <yol>" cikar.
+//
+STATIC BOOLEAN
+B2LProgramToken (
+  IN CONST CHAR16  *Tok
+  )
+{
+  UINTN  Len;
+
+  Len = StrLen (Tok);
+  if (Len == 0) {
+    return FALSE;
+  }
+
+  //
+  // Yol ayirici iceriyorsa kesin program adidir (dosya/bolum adlarinda
+  // bunlar bulunmaz).
+  //
+  if ((StrStr (Tok, L"\\") != NULL) || (StrStr (Tok, L"/") != NULL)) {
+    return TRUE;
+  }
+
+  //
+  // ".EFI" / ".efi" ile bitiyorsa program adidir (harf durumu onemsiz).
+  //
+  if (Len >= 4) {
+    if ((Tok[Len - 4] == L'.') &&
+        ((Tok[Len - 3] | 0x20) == L'e') &&
+        ((Tok[Len - 2] | 0x20) == L'f') &&
+        ((Tok[Len - 1] | 0x20) == L'i'))
+    {
+      return TRUE;
+    }
+  }
+
+  return FALSE;
+}
+
 EFI_STATUS
 EFIAPI
 B2LToolEntry (
@@ -743,11 +786,26 @@ B2LToolEntry (
   // Argumanlar: once Shell parametre protokolu (Shell'den cagrildi), yoksa
   // LoadedImage LoadOptions (BDS boot option OptionalData).
   //
-  Status = gBS->LocateProtocol (
+  // DIKKAT: Shell, EFI_SHELL_PARAMETERS_PROTOCOL'u GLOBAL bir handle'a degil,
+  // calistirdigi uygulamanin KENDI image handle'ina kurar. Bu yuzden once
+  // HandleProtocol (ImageHandle) denenir; ancak o yoksa LocateProtocol'a
+  // dusulur. (Yalnizca LocateProtocol kullanmak Shell'den cagrildiginda
+  // basarisiz oluyor ve argumanlar LoadOptions'a dusuyordu.)
+  //
+  Status = gBS->HandleProtocol (
+                  ImageHandle,
                   (EFI_GUID *)(VOID *)&gEfiShellParametersProtocolGuid,
-                  NULL,
                   (VOID **)&Shell
                   );
+  if (EFI_ERROR (Status)) {
+    Shell = NULL;
+    Status = gBS->LocateProtocol (
+                    (EFI_GUID *)(VOID *)&gEfiShellParametersProtocolGuid,
+                    NULL,
+                    (VOID **)&Shell
+                    );
+  }
+
   if (!EFI_ERROR (Status) && (Shell != NULL) && (Shell->Argc > 1)) {
     UINTN  I;
 
@@ -782,6 +840,20 @@ B2LToolEntry (
   }
 
   B2LTokenize (Line, Tok, &TokCount);
+
+  //
+  // LoadOptions komut satirinin tamamini tasiyorsa Tok[0] program adidir;
+  // onu at ki Tok[0] gercek subkomut olsun. (Shell parametre protokolu
+  // yolunda argv[0] zaten dahil edilmez, bu durumda hicbir sey degismez.)
+  //
+  if ((TokCount > 0) && B2LProgramToken (Tok[0])) {
+    UINTN  I;
+
+    for (I = 1; I < TokCount; I++) {
+      StrCpyS (Tok[I - 1], B2L_TOK_CHARS, Tok[I]);
+    }
+    TokCount--;
+  }
 
   if (TokCount == 0) {
     B2LMenu ();
