@@ -572,7 +572,53 @@ Bundle build ini: `uefi-boot.tar` SHA-256
 `Mu-beyond0lte.img` SHA-256
 `27fe60a9fd6eb1371fb1b13b8d4e4fcb5c67492be344c303d8b51aae8a027d26`
 (zip `3a9be4733282dc7ede0cf51f00fdd39ee962e2386415bba98b6f9239d7f71fb9`).
-**Status: menunggu hasil flash** (hasil akan dicatat di baris berikutnya).
+
+##### Hasil di perangkat — sentuh hidup
+
+Bundle di atas di-flash; hasilnya:
+
+| Baris | Hasil | Arti |
+| --- | --- | --- |
+| `Touch.ent` | `stage=7 st=Success` | seluruh entry selesai |
+| `Touch.id` | `53 45 37 61 00` | Device ID `"SE7a"` — chip menjawab |
+| `Touch.id` | `iv=80 bs=20 rc=2 pc=2` | firmware OK, mode `APP`; reset/probe 2x |
+| `Touch.fn` | `be=6100 af=6100 ok=1` | touch function `0x61` benar |
+| `Touch.pm` | `loc=1 set=11 pwr=1` | protokol regulator ketemu, dua LDO di-set |
+| `Touch.pm` | `io=1800000 av=3000000 uV` | `tsp_io` 1,8 V, `tsp_avdd` 3,0 V — tepat |
+| `Touch.err` | `Success` | tidak ada transfer gagal |
+| `Touch.di` | `int=00000000 tr=00000000` | tidak ada NACK/timeout |
+| `Touch.sc` | semua nol | tarama tidak perlu (tidak ada kegagalan) |
+| `Touch.ev` | `p=6232 e=0 x=0` | ribuan poll, nol error I2C |
+| `Touch.ev` | `s=815 c=6878 i=5980` | 6878 event koordinat diproses |
+| `Touch.raw` | `C4 C8 89 0C 08 08 20 00` | event nyata; berubah mengikuti sentuhan |
+| `Touch.m` | `4095 x 4095` | mode milik driver kita (bukan ConSplitter) |
+
+Contoh event `C4 C8 89 0C 08 08 20 00` = `RELEASE`, `touchId=1`,
+`X=0xC80=3200`, `Y=0x89C=2204` — nilai masuk akal untuk panel 4095.
+
+Kesimpulan: **I2C/panel/touch benar-benar hidup.** Akar masalah sebelumnya
+(rail daya belum menyala karena urutan APRIORI) sudah teratasi. `ev/raw`
+berubah mengikuti sentuhan di layar, sesuai yang diharapkan.
+
+##### Perbaikan tata letak layar
+
+Dengan 39 baris (61 px/baris) layar 1080×2280 meluber, sehingga baris
+`Touch` (koordinat hidup) dan `Touch.dx` (hitungan `hit`) terpotong di bawah
+`Key`. Perbaikan tata letak (isi tetap sama):
+
+1. `Block IO` menampilkan maksimal 2 perangkat (bukan 6).
+2. `Touch.ent` digabung jadi satu baris (`stage` + `st`).
+3. `Touch.di`/`Touch.sc` hanya dicetak bila memang ada kegagalan
+   (`LastStatus != 0` atau `ScanDone`), jadi tidak menyita ruang saat normal.
+
+Sekarang total ~31 baris; `Touch` dan `Touch.dx` terlihat penuh.
+
+Bundle tata letak baru: `uefi-boot.tar` SHA-256
+`9c9f800056b9ce00280a3615ecea7bffd730f87751f218271909484557621662`,
+`Mu-beyond0lte.img` SHA-256
+`1465739896e681c9ee61b409fc2a84194c6edfa45d25892c637b177c5c90c3b2`
+(zip `11a26d6253a8bdea5d4efb5373f1d897335ff5f787aee9b85bace711a199a07e`).
+**Status: sentuh terverifikasi; tata letak dirapikan.**
 
 ---
 

@@ -380,8 +380,12 @@ B2LDrawDevices (
     B2LUiPrint (B2L_UI_KIRMIZI, L"Block IO: none (%r)", Status);
   } else {
     B2LUiPrint (B2L_UI_BEYAZ, L"Block IO: %u device", (UINT32)HandleCount);
+    //
+    // Yalnizca ilk iki cihaz yazilir: ekranin altinda canli dokunma
+    // satirlarina yer kalmasi gerekiyor (bkz. B2L_UI_OLCEK).
+    //
     Shown = 0;
-    for (Index = 0; (Index < HandleCount) && (Shown < 6); Index++) {
+    for (Index = 0; (Index < HandleCount) && (Shown < 2); Index++) {
       Status = gBS->HandleProtocol (Handles[Index], &gEfiBlockIoProtocolGuid, (VOID **)&Bio);
       if (EFI_ERROR (Status) || (Bio->Media == NULL)) {
         continue;
@@ -632,12 +636,8 @@ B2LSelfTest (
     if (DiagOk) {
       B2LUiPrint (
         (TouchDiag->Diag.Stage == B2L_TOUCH_STAGE_DONE) ? B2L_UI_YESIL : B2L_UI_KIRMIZI,
-        L"Touch.ent: stage=%u",
-        TouchDiag->Diag.Stage
-        );
-      B2LUiPrint (
-        !EFI_ERROR ((EFI_STATUS)(UINTN)TouchDiag->Diag.EntryStatus) ? B2L_UI_YESIL : B2L_UI_SARI,
-        L"Touch.ent: st=%r",
+        L"Touch.ent: stage=%u st=%r",
+        TouchDiag->Diag.Stage,
         (EFI_STATUS)(UINTN)TouchDiag->Diag.EntryStatus
         );
       B2LUiPrint (
@@ -685,24 +685,32 @@ B2LSelfTest (
         L"Touch.err: %r",
         (EFI_STATUS)(UINTN)TouchDiag->Diag.LastStatus
         );
-      B2LUiPrint (
-        B2L_UI_GRI,
-        L"Touch.di : int=%08x tr=%08x",
-        TouchDiag->Diag.IntStatus,
-        TouchDiag->Diag.TransStatus
-        );
-      B2LUiPrint (
-        B2L_UI_GRI,
-        L"Touch.sc : %08x %08x",
-        TouchDiag->Diag.ScanAck[0],
-        TouchDiag->Diag.ScanAck[1]
-        );
-      B2LUiPrint (
-        B2L_UI_GRI,
-        L"Touch.sc : %08x %08x",
-        TouchDiag->Diag.ScanAck[2],
-        TouchDiag->Diag.ScanAck[3]
-        );
+
+      //
+      // HSI2C ham durumu ve adres taramasi YALNIZCA bir hata olduysa
+      // basilir. Basarili durumda yer kaplamamali: canli dokunma satirlari
+      // ekranin altina sigmali.
+      //
+      if ((TouchDiag->Diag.LastStatus != 0) || (TouchDiag->Diag.ScanDone != 0)) {
+        B2LUiPrint (
+          B2L_UI_GRI,
+          L"Touch.di : int=%08x tr=%08x",
+          TouchDiag->Diag.IntStatus,
+          TouchDiag->Diag.TransStatus
+          );
+        B2LUiPrint (
+          B2L_UI_GRI,
+          L"Touch.sc : %08x %08x",
+          TouchDiag->Diag.ScanAck[0],
+          TouchDiag->Diag.ScanAck[1]
+          );
+        B2LUiPrint (
+          B2L_UI_GRI,
+          L"Touch.sc : %08x %08x",
+          TouchDiag->Diag.ScanAck[2],
+          TouchDiag->Diag.ScanAck[3]
+          );
+      }
       B2LUiPrint (
         B2L_UI_GRI,
         L"Touch.ev : p=%u e=%u x=%u",
