@@ -1219,6 +1219,12 @@ dibersihkan dan blok statis digambar di atasnya. Karena flag-nya sekali-jalan
 (`mConInIsConnect`), loop canli tidak memicunya lagi. Perubahan hanya di
 `B2LPlatformBootManager.c`.
 
+Terverifikasi: setelah flash, seluruh blok tampil dari paling atas — banner,
+`Display 1080x2280`, `RAM 6144 MB DRAM, 2079 MB free`, `Memmap 63 desc`,
+`Block IO 37 device`, `USB.*`, lalu `Key` + `USB.ser: su=14 cf=1 ad=44 pm=10316
+ev=6` / `rx=6 tx=6 lc=1`. Baris kecil `Touch: sec_ts id=…` di paling atas
+adalah keluaran konsol driver sentuh (normal). Tidak ada lagi bagian kosong.
+
 ---
 
 ## 7. Rollback
