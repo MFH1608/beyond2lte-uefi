@@ -1517,10 +1517,41 @@ merusak).
 #### Bundel flash (M4)
 
 ```
-~/Downloads/beyond0lte-flash.zip                                    sha256 7783d5ecfd8d9ee692fb1988ff08839b0536202c0b12f4ce3e533767ff7f9a9f
-  uefi-boot.tar        sha256 7ff7f525874d16c46f734ddde952444bb507f27297a7959f5abbf0c155f0fdac
+~/Downloads/beyond0lte-flash.zip                                    sha256 e338ebbbcaab8e385ac90bbeff93df360f21d172d7dbf41d52f4e14cab90b6d9
+  uefi-boot.tar        sha256 cfaa80ff817228f17edd6e63d165ccdb55c05be1b2d5f7362bed52897601c826
   Mu-beyond0lte.img    sha256 b1d93295006c068b290f38ebfc1fcd0749cd05bfdc4f74665e22c07b1ac13fda
 ```
+
+`Mu-beyond0lte.img` **byte-identik** dengan build M4 yang sudah diuji
+(sha256 `b1d9329...`): perubahan pasca-verifikasi hanya metadata INF, bukan
+kode firmware. Karena itu hasil uji `reset` di atas tetap berlaku.
+
+#### Rapikan: warning `does not support LIBRARY_CLASS`
+
+Build dulu mengeluh:
+
+```
+S5E9820Pkg.dsc.inc(81): warning: .../ResetSystemLib.inf does not support LIBRARY_CLASS HwResetSystemLib
+```
+
+Sebabnya: `ResetSystemRuntimeDxe.inf` (MU_CHANGE) memakai kelas
+`HwResetSystemLib`, dan DSC memetakan kelas itu ke `ResetSystemLib.inf` ini,
+tetapi INF hanya mendeklarasikan `ResetSystemLib`. Perbaikan: INF di overlay
+mendeklarasikan **keduanya**, sebagai **dua baris terpisah**:
+
+```
+LIBRARY_CLASS = ResetSystemLib|DXE_RUNTIME_DRIVER
+LIBRARY_CLASS = HwResetSystemLib|DXE_RUNTIME_DRIVER
+```
+
+Dua baris terpisah itu perlu: BaseTools di sini (`InfBuildData.py`,
+`GetSplitValueList`) mengambil `ValueList[0]` — yaitu seluruh teks sebelum
+`|` — sebagai **satu** nama kelas, jadi bentuk `"A B|T"` tidak dikenali.
+
+Sisa satu warning berasal dari upstream (`SiliciumPkg.dsc.inc(211)` →
+`ArmPsciResetSystemLib.inf`); entri itu memang tertimpa oleh mapping S5E9820
+kita dan tidak memengaruhi hasil. Tidak kami sentuh karena file upstream
+bersama.
 
 #### Verifikasi: SUKSES
 
