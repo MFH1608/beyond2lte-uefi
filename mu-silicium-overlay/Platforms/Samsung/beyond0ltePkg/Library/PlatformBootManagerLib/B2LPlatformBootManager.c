@@ -385,6 +385,24 @@ B2LUiClearFrom (
 }
 
 /**
+  MapMemoryRegion zaten haritali bir bolge icin EFI_ALREADY_STARTED /
+  EFI_ACCESS_DENIED doner. M2a'dan sonra bunu artik bekle: sinif
+  surucusu (B2LUsbSerialDxe) DXE dispatch'te StartController'i cagirip
+  bolgeleri bizden ONCE haritalar. Bu yuzden "hata" degil, "kullanilabilir"
+  sayilir (bkz. PlatformUsbfnLib/BoardInit.c UsbMapRegions).
+**/
+STATIC
+BOOLEAN
+B2LMapOk (
+  IN EFI_STATUS  Status
+  )
+{
+  return (BOOLEAN)(!EFI_ERROR (Status) ||
+                   (Status == EFI_ALREADY_STARTED) ||
+                   (Status == EFI_ACCESS_DENIED));
+}
+
+/**
   USB bloklarini SALT OKUYARAK bir kez ornekle. Yazma yok; ekranin
   canli dongusunde degil, statik bolumde cagrilir.
 
@@ -414,12 +432,12 @@ B2LUsbRead (
   mUsb.PmuPhy   = MmioRead32 ((UINTN)(B2L_USB_PMU_BASE + B2L_USB_PMU_PHY));
   mUsb.PmuPhyDp = MmioRead32 ((UINTN)(B2L_USB_PMU_BASE + B2L_USB_PMU_PHY_DP));
 
-  if (!EFI_ERROR (mUsbConMap)) {
+  if (B2LMapOk (mUsbConMap)) {
     mUsb.UsbconVer    = MmioRead32 ((UINTN)(B2L_USB_USBCON_BASE + B2L_USB_USBCON_VER));
     mUsb.UsbconClkrst = MmioRead32 ((UINTN)(B2L_USB_USBCON_BASE + B2L_USB_USBCON_CLKRST));
   }
 
-  if (!EFI_ERROR (mUsbDwc3Map)) {
+  if (B2LMapOk (mUsbDwc3Map)) {
     mUsb.SnpsId      = MmioRead32 ((UINTN)(B2L_USB_DWC3_BASE + B2L_USB_DWC3_GSNPSID));
     mUsb.Gctl        = MmioRead32 ((UINTN)(B2L_USB_DWC3_BASE + B2L_USB_DWC3_GCTL));
     mUsb.XhciCapLen  = MmioRead32 ((UINTN)(B2L_USB_DWC3_BASE + B2L_USB_XHCI_CAPLEN));
@@ -447,7 +465,7 @@ B2LDrawUsb (
     return;
   }
 
-  if (EFI_ERROR (mUsbConMap) || EFI_ERROR (mUsbDwc3Map)) {
+  if (!B2LMapOk (mUsbConMap) || !B2LMapOk (mUsbDwc3Map)) {
     B2LUiPrint (
       B2L_UI_KIRMIZI,
       L"USB.map : con=%r dw3=%r",
@@ -918,8 +936,10 @@ B2LSelfTest (
 
     //
     // USB device-mode: basarisizsa HANGI asama + o asamanin status'u; basarili
-    // ise enumerasyon kaniti (su = gelen setup sayisi, cf = SET_CONFIGURATION,
-    // ad = atanan adres). Tek satir, cunku ekran dolu.
+    // ise enumerasyon kaniti. su = gelen setup sayisi, cf = SET_CONFIGURATION,
+    // ad = atanan adres, pm = olay pompasi kac kez cagrildi (0 ise pompa hic
+    // donmedi), ev = reset/attach/detach gibi bus olayi sayisi (0 ise host
+    // hic konusmadi). Tek satir, cunku ekran dolu.
     //
     if (UsbDiagOk) {
       if (UsbDiag->Diag.Stage != B2L_USB_STAGE_DONE) {
@@ -932,10 +952,12 @@ B2LSelfTest (
       } else {
         B2LUiPrint (
           (UsbDiag->Diag.Configured != 0) ? B2L_UI_YESIL : B2L_UI_SARI,
-          L"USB.ser: su=%u cf=%u ad=%u",
+          L"USB.ser: su=%u cf=%u ad=%u pm=%u ev=%u",
           UsbDiag->Diag.Setups,
           UsbDiag->Diag.Configured,
-          UsbDiag->Diag.Addr
+          UsbDiag->Diag.Addr,
+          UsbDiag->Diag.Pumps,
+          UsbDiag->Diag.BusEvents
           );
       }
     } else {

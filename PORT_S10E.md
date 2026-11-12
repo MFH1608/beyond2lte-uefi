@@ -973,8 +973,8 @@ Di PC, saat perangkat terhubung: `lsusb` harus menampilkan `04e8:2143`
 
 | Berkas | SHA-256 |
 | --- | --- |
-| `~/Downloads/beyond0lte-flash/uefi-boot.tar` | `d5358c15ac08123616a41e9519cfcba72fe4950a2020b6ff65ae5008f60a520e` |
-| `~/Downloads/beyond0lte-flash/Mu-beyond0lte.img` | `bfbf75181d46e228cefd1edb121d387b1fe8aa5a8f6c4d64f61ca7fa81eea618` |
+| `~/Downloads/beyond0lte-flash/uefi-boot.tar` | `ab7db61b766c3ead596b0e52b7f7343f66f6093ba2e9b20e1ae72d5fe04d2bb3` |
+| `~/Downloads/beyond0lte-flash/Mu-beyond0lte.img` | `11185c0190758f12789558611973b0751fde38f23d144eb877a8d01d8ca0617b` |
 
 > **Catatan hash:** setiap build menyisipkan cap waktu, jadi SHA-256
 > `uefi-boot.tar`/`Mu-beyond0lte.img` **berubah tiap rebuild** meski sumbernya
@@ -1005,6 +1005,47 @@ Yang berubah di `B2LPlatformBootManager.c`:
 
 Sisa blok hidup kini cuma **2 baris** (`Key` dan `USB.ser`), jadi layar penuh
 terbaca (informasi Display/RAM/Memmap/USB di atas tidak lagi terpotong).
+
+#### Hasil di perangkat (M2a)
+
+Layar kini penuh terbaca. Yang terlihat:
+
+```
+USB.map : con=Access Denied dw3=Access Denied > merah
+USB.pmu : 00000001 00000000 > abu
+USB.con : 00000000 00000000 > abu
+USB.dw3 : 00000000 00000000 > abu
+USB.xhc : 00000000 00000000 > abu
+USB.dev : st=Success > hijau
+USB.ctl : 30C12004 80F00000 008E0001 > abu
+Key     : Volume Up   -> SCAN_UP (0x01)
+USB.ser : su=0 cf=0 ad=0 > kuning
+```
+
+Tafsir:
+
+- `USB.dev : st=Success` → `StartController` (PHY+core) OK.
+- `USB.ctl` → GCTL `PRTCAPDIR=DEVICE`, DCTL `RUN_STOP`(bit31)=**1** (port
+  aktif), DSTS `USBLNKST`=3 (`HS_SUSPEND`). Karena PHY memaksa
+  `VBUSVALID`/`BVALID` (tidak ada pad VBUS nyata), "suspend" di sini **bukan**
+  bukti ada host; tanpa host pun state ini muncul.
+- **`su=0 cf=0`** → belum ada satu pun SETUP; yaitu **host/PC belum
+  mengenumerasi**. Sebab paling mungkin: kabel tidak tersambung ke PC (atau ke
+  port yang tidak melakukan enumerasi) saat self-test.
+
+#### Perbaikan cepat pasca-M2a
+
+1. **`USB.map` merah (`Access Denied`) adalah regresi tampilan, bukan
+   kesalahan nyata.** `B2LUsbSerialDxe` sudah memetakan region USB lebih dulu
+   (lewat `StartController` di DXE dispatch), jadi `B2LUsbRead` menerima
+   `EFI_ACCESS_DENIED`. Ini kini dianggap "sudah terpetakan" (`B2LMapOk`),
+   sehingga `USB.con/dw3/xhc` kembali terisi nilai asli.
+2. **`USB.ser` kini memuat `pm` dan `ev`** untuk membedakan sebab `su=0`:
+   - `pm` = berapa kali pompa olah-event jalan. `pm=0` berarti pompa **tidak
+     pernah** jalan (masalah time-timer/TPL) — device tak akan pernah menjawab.
+   - `ev` = jumlah bus event (reset/attach/detach/suspend). `ev>0` berarti
+     host **ada** dan sudah menyentuh kita, walau `su=0`.
+   Jadi bacaan yang diinginkan: `pm` besar, dan bila PC tersambung `ev≥1`.
 
 ---
 
