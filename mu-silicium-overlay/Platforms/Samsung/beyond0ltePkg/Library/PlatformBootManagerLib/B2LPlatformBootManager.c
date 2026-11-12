@@ -24,6 +24,7 @@
 #include <Library/BaseLib.h>
 #include <Library/PrintLib.h>
 #include <Library/IoLib.h>
+#include <Library/MemoryAllocationHelperLib.h>
 
 #include <Protocol/BlockIo.h>
 #include <Protocol/AbsolutePointer.h>
@@ -132,6 +133,12 @@ STATIC CONST EFI_GUID  mB2LTouchDiagGuid = B2L_TOUCH_DIAG_PROTOCOL_GUID;
 // CAPLENGTH makul cikarsa blok S-Boot'tan canli devralinmis demektir;
 // 0 ya da 0xffffffff cikarsa once saat/guc getirmek gerekir.
 //
+// ONEMLI: S-Boot, USB MMIO sayfalarini (USBCON/DWC3) UEFI memory map'ine
+// KOYMAZ. Ilk deneme (v1) bu yuzden ilk okumada "Data abort / Translation
+// fault, second level" ile coktu. Bu yuzden okumadan once her bolge
+// MapMemoryRegion() ile EfiMemoryMappedIO olarak haritalanir; haritalama
+// basarisizsa o bolge HIC OKUNMAZ (fault imkansiz).
+//
 // Adresler stok S10e DTB'sinden (Resources/DTBs/beyond0lte.dts) ve
 // S5E7885Pkg / S5E9830Pkg PlatformUsbfnLib yerlesiminden alindi; ikisi de
 // ayni USBCON register haritasini kullanir. DWC3 global offsetleri
@@ -141,9 +148,11 @@ STATIC CONST EFI_GUID  mB2LTouchDiagGuid = B2L_TOUCH_DIAG_PROTOCOL_GUID;
 #define B2L_USB_PMU_PHY         0x072C    // usbdrd phy control (DTB pmu_offset)
 #define B2L_USB_PMU_PHY_DP      0x0704    // usbdp phy control (DTB pmu_offset_dp)
 #define B2L_USB_USBCON_BASE     0x10B00000ULL   // phy@10B00000, reg[0] 0x200
+#define B2L_USB_USBCON_SIZE     0x1000    // phy node reg uzunlugu (4 KiB)
 #define B2L_USB_USBCON_VER      0x00      // CTRL_VER
 #define B2L_USB_USBCON_CLKRST   0x20      // CLKRST
 #define B2L_USB_DWC3_BASE       0x10C00000ULL   // usb@10C00000 (dwc3)
+#define B2L_USB_DWC3_SIZE       0x10000   // usb node reg uzunlugu (64 KiB)
 #define B2L_USB_DWC3_GSNPSID    0xC120    // Synopsys kimlik (0x5533xxxx)
 #define B2L_USB_DWC3_GCTL       0xC110    // PRTCAPDIR burada
 #define B2L_USB_XHCI_CAPLEN     0x00      // xHCI CAPLENGTH(8) | HCIVERSION(16)
@@ -161,6 +170,8 @@ typedef struct {
 } B2L_USB_PROBE;
 
 STATIC B2L_USB_PROBE  mUsb;
+STATIC EFI_STATUS     mUsbConMap;
+STATIC EFI_STATUS     mUsbDwc3Map;
 STATIC BOOLEAN        mUsbValid;
 
 STATIC EFI_GRAPHICS_OUTPUT_PROTOCOL  *mUiGop;
@@ -302,6 +313,12 @@ B2LUiClearFrom (
 /**
   USB bloklarini SALT OKUYARAK bir kez ornekle. Yazma yok; ekranin
   canli dongusunde degil, statik bolumde cagrilir.
+
+  S-Boot USB MMIO sayfalarini memory map'e koymadigi icin once
+  MapMemoryRegion() ile EfiMemoryMappedIO olarak haritalanir. Yalnizca
+  haritalama basarili olan bolge okunur; aksi halde hic dokunulmaz.
+  PMU bolgesi (0x15860000) S-Boot tarafindan zaten haritalanmistir
+  (v1'de okunabildi), o yuzden dogrudan okunur.
 **/
 STATIC
 VOID
@@ -309,14 +326,31 @@ B2LUsbRead (
   VOID
   )
 {
-  mUsb.PmuPhy       = MmioRead32 ((UINTN)(B2L_USB_PMU_BASE + B2L_USB_PMU_PHY));
-  mUsb.PmuPhyDp     = MmioRead32 ((UINTN)(B2L_USB_PMU_BASE + B2L_USB_PMU_PHY_DP));
-  mUsb.UsbconVer    = MmioRead32 ((UINTN)(B2L_USB_USBCON_BASE + B2L_USB_USBCON_VER));
-  mUsb.UsbconClkrst = MmioRead32 ((UINTN)(B2L_USB_USBCON_BASE + B2L_USB_USBCON_CLKRST));
-  mUsb.SnpsId       = MmioRead32 ((UINTN)(B2L_USB_DWC3_BASE + B2L_USB_DWC3_GSNPSID));
-  mUsb.Gctl         = MmioRead32 ((UINTN)(B2L_USB_DWC3_BASE + B2L_USB_DWC3_GCTL));
-  mUsb.XhciCapLen   = MmioRead32 ((UINTN)(B2L_USB_DWC3_BASE + B2L_USB_XHCI_CAPLEN));
-  mUsb.XhciParams1  = MmioRead32 ((UINTN)(B2L_USB_DWC3_BASE + B2L_USB_XHCI_HCSPARAMS1));
+  mUsbConMap  = MapMemoryRegion (
+                  B2L_USB_USBCON_BASE,
+                  B2L_USB_USBCON_SIZE,
+                  EfiMemoryMappedIO
+                  );
+  mUsbDwc3Map = MapMemoryRegion (
+                  B2L_USB_DWC3_BASE,
+                  B2L_USB_DWC3_SIZE,
+                  EfiMemoryMappedIO
+                  );
+
+  mUsb.PmuPhy   = MmioRead32 ((UINTN)(B2L_USB_PMU_BASE + B2L_USB_PMU_PHY));
+  mUsb.PmuPhyDp = MmioRead32 ((UINTN)(B2L_USB_PMU_BASE + B2L_USB_PMU_PHY_DP));
+
+  if (!EFI_ERROR (mUsbConMap)) {
+    mUsb.UsbconVer    = MmioRead32 ((UINTN)(B2L_USB_USBCON_BASE + B2L_USB_USBCON_VER));
+    mUsb.UsbconClkrst = MmioRead32 ((UINTN)(B2L_USB_USBCON_BASE + B2L_USB_USBCON_CLKRST));
+  }
+
+  if (!EFI_ERROR (mUsbDwc3Map)) {
+    mUsb.SnpsId      = MmioRead32 ((UINTN)(B2L_USB_DWC3_BASE + B2L_USB_DWC3_GSNPSID));
+    mUsb.Gctl        = MmioRead32 ((UINTN)(B2L_USB_DWC3_BASE + B2L_USB_DWC3_GCTL));
+    mUsb.XhciCapLen  = MmioRead32 ((UINTN)(B2L_USB_DWC3_BASE + B2L_USB_XHCI_CAPLEN));
+    mUsb.XhciParams1 = MmioRead32 ((UINTN)(B2L_USB_DWC3_BASE + B2L_USB_XHCI_HCSPARAMS1));
+  }
 
   mUsbValid = TRUE;
 }
@@ -325,6 +359,8 @@ B2LUsbRead (
   USB ornegini ekrana bas. Renkler kaba yorumdur:
     yesil  -> deger makul (GSNPSID 0x5533.., xHCI CAPLENGTH != 0)
     gri    -> bilinmiyor / notr
+  Haritalama basarisizsa yalnizca bu durumda kirmizi "USB.map" satiri
+  basilir; normal durumda 4 satir kalir (yerlesim degismez).
 **/
 STATIC
 VOID
@@ -335,6 +371,15 @@ B2LDrawUsb (
   if (!mUsbValid) {
     B2LUiPrint (B2L_UI_KIRMIZI, L"USB     : probe skipped");
     return;
+  }
+
+  if (EFI_ERROR (mUsbConMap) || EFI_ERROR (mUsbDwc3Map)) {
+    B2LUiPrint (
+      B2L_UI_KIRMIZI,
+      L"USB.map : con=%r dw3=%r",
+      mUsbConMap,
+      mUsbDwc3Map
+      );
   }
 
   B2LUiPrint (B2L_UI_GRI, L"USB.pmu : %08x %08x", mUsb.PmuPhy, mUsb.PmuPhyDp);

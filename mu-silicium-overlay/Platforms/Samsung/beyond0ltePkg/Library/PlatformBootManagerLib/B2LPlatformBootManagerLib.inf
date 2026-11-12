@@ -18,11 +18,14 @@
   MdePkg/MdePkg.dec
   MdeModulePkg/MdeModulePkg.dec
   MsCorePkg/MsCorePkg.dec
+  SiliciumPkg/SiliciumPkg.dec
 
 [LibraryClasses]
   BaseLib
   BaseMemoryLib
+  DxeServicesTableLib
   IoLib
+  MemoryAllocationHelperLib
   UefiLib
   UefiBootServicesTableLib
   MemoryAllocationLib

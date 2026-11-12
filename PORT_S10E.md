@@ -696,14 +696,40 @@ Untuk menghemat ruang layar, dua baris petunjuk tombol digabung menjadi satu
 (`VolUp/Down=Up/Down Bixby=Enter Bixby+Vol=Exit`); perilaku tombol tidak
 berubah, hanya labelnya.
 
-Bundle probe (build ini):
+#### v1: device hang (Data abort) dan perbaikannya
+
+Flash v1 di S10e berhenti di percobaan baca pertama:
+
+```
+Synchronous Exception at ...
+ESR 0x96000006  EC 0x25  ISS 0x6   (Data abort)
+                 Translation fault, second level
+FAR  0x0000000010B00000
+X19  0x0000000010B00000
+ASSERT [ArmCpuDxe] CpuExceptionHandlerLib.c(438)
+```
+
+Artinya: pembacaan PMU (`0x15860000`) berhasil (region itu ada di memory map
+S-Boot), lalu pembacaan USBCON (`0x10B00000`) meleset — **region USB tidak
+dipetakan di page table UEFI**. Sebelumnya diasumsikan S-Boot meninggalkan
+seluruh blok USB terpetakan; ternyata tidak.
+
+v2 memakai pola yang sama seperti `HsI2cDxe`/`GpioDxe`/`SpeedyDxe`: setiap
+region USB dipetakan dulu sebagai `EfiMemoryMappedIO` lewat `MapMemoryRegion`
+(`SiliciumPkg/Library/MemoryAllocationHelperLib`), lalu **hanya region yang
+berhasil dipetakan yang dibaca**. Kalau pemetaan gagal, region itu tidak pernah
+disentuh, sehingga Data abort tidak mungkin lagi terjadi. Bila ada yang gagal,
+layar menampilkan satu baris merah tambahan, `USB.map : con=%r dw3=%r`;
+pada keadaan normal hanya 4 baris `USB.*` seperti sebelumnya.
+
+Bundle probe (build v2):
 
 - `uefi-boot.tar` SHA-256
-  `1fbbdf6f98a299b30e5f2c650dd25944324889c35b282c5f16799139a92c7512`
+  `71590e634af8a0ce89ab2125fb6d6339a1941c378d2f4d15fecda7419bdfab50`
 - `Mu-beyond0lte.img` SHA-256
-  `ab242841028d94122124d13bd8525eba922103177e74f0b6366edb4ab72aad9d`
+  `0cd2b3acd11b33902019e1fcbbc7134271db7255de6d0d2b9dc197c3a9ffcc0d`
 - zip SHA-256
-  `332d2c3d4fcb0d3d5715fc2f30485f001717463b14a0c4eef830832e63b8bc5e`
+  `795c4d496c8bcb2b329c78cd81e8b61b7a979374fe52ecc105eb420b6b3aa692`
 
 #### Hasil di perangkat
 
