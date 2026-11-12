@@ -23,6 +23,7 @@
 #include <Library/BaseMemoryLib.h>
 #include <Library/BaseLib.h>
 #include <Library/PrintLib.h>
+#include <Library/IoLib.h>
 
 #include <Protocol/BlockIo.h>
 #include <Protocol/AbsolutePointer.h>
@@ -118,6 +119,49 @@ STATIC CONST EFI_GUID  mB2LTouchDiagGuid = B2L_TOUCH_DIAG_PROTOCOL_GUID;
 #define B2L_UI_KIRMIZI  0x00FF4040
 #define B2L_UI_SARI     0x00FFFF40
 #define B2L_UI_MAVI     0x0060C0FF
+
+//
+// ==================== USB getirme denemesi (S10e) ====================
+//
+// Amac: USB yigininin (DWC3/xHCI) bu cihazda ACILIP acilmadigini TEK
+// flash'ta olcmek. Cihazda harf ureten klavye/seri konsol olmadigi icin
+// degerler dogrudan self-test ekranina basilir.
+//
+// Bu blok SALT OKUMADIR - hicbir register YAZILMAZ. Sonuc, ileriki adimin
+// (PHY/saat getirme) gerekli olup olmadigini gosterir: GSNPSID ve xHCI
+// CAPLENGTH makul cikarsa blok S-Boot'tan canli devralinmis demektir;
+// 0 ya da 0xffffffff cikarsa once saat/guc getirmek gerekir.
+//
+// Adresler stok S10e DTB'sinden (Resources/DTBs/beyond0lte.dts) ve
+// S5E7885Pkg / S5E9830Pkg PlatformUsbfnLib yerlesiminden alindi; ikisi de
+// ayni USBCON register haritasini kullanir. DWC3 global offsetleri
+// SamsungPkg/Include/Device/Dwc3.h ile aynidir.
+//
+#define B2L_USB_PMU_BASE        0x15860000ULL
+#define B2L_USB_PMU_PHY         0x072C    // usbdrd phy control (DTB pmu_offset)
+#define B2L_USB_PMU_PHY_DP      0x0704    // usbdp phy control (DTB pmu_offset_dp)
+#define B2L_USB_USBCON_BASE     0x10B00000ULL   // phy@10B00000, reg[0] 0x200
+#define B2L_USB_USBCON_VER      0x00      // CTRL_VER
+#define B2L_USB_USBCON_CLKRST   0x20      // CLKRST
+#define B2L_USB_DWC3_BASE       0x10C00000ULL   // usb@10C00000 (dwc3)
+#define B2L_USB_DWC3_GSNPSID    0xC120    // Synopsys kimlik (0x5533xxxx)
+#define B2L_USB_DWC3_GCTL       0xC110    // PRTCAPDIR burada
+#define B2L_USB_XHCI_CAPLEN     0x00      // xHCI CAPLENGTH(8) | HCIVERSION(16)
+#define B2L_USB_XHCI_HCSPARAMS1 0x04      // xHCI HCSPARAMS1
+
+typedef struct {
+  UINT32  PmuPhy;         // PMU + 0x72C
+  UINT32  PmuPhyDp;       // PMU + 0x704
+  UINT32  UsbconVer;      // USBCON CTRL_VER
+  UINT32  UsbconClkrst;   // USBCON CLKRST
+  UINT32  SnpsId;         // DWC3 GSNPSID
+  UINT32  Gctl;           // DWC3 GCTL
+  UINT32  XhciCapLen;     // xHCI CAPLENGTH/HCIVERSION
+  UINT32  XhciParams1;    // xHCI HCSPARAMS1
+} B2L_USB_PROBE;
+
+STATIC B2L_USB_PROBE  mUsb;
+STATIC BOOLEAN        mUsbValid;
 
 STATIC EFI_GRAPHICS_OUTPUT_PROTOCOL  *mUiGop;
 STATIC EFI_HII_FONT_PROTOCOL         *mUiFont;
@@ -252,6 +296,60 @@ B2LUiClearFrom (
     &mUiFb[Y0 * mUiStride],
     (UINTN)(VRes - Y0) * mUiStride * sizeof (UINT32),
     0x00000000
+    );
+}
+
+/**
+  USB bloklarini SALT OKUYARAK bir kez ornekle. Yazma yok; ekranin
+  canli dongusunde degil, statik bolumde cagrilir.
+**/
+STATIC
+VOID
+B2LUsbRead (
+  VOID
+  )
+{
+  mUsb.PmuPhy       = MmioRead32 ((UINTN)(B2L_USB_PMU_BASE + B2L_USB_PMU_PHY));
+  mUsb.PmuPhyDp     = MmioRead32 ((UINTN)(B2L_USB_PMU_BASE + B2L_USB_PMU_PHY_DP));
+  mUsb.UsbconVer    = MmioRead32 ((UINTN)(B2L_USB_USBCON_BASE + B2L_USB_USBCON_VER));
+  mUsb.UsbconClkrst = MmioRead32 ((UINTN)(B2L_USB_USBCON_BASE + B2L_USB_USBCON_CLKRST));
+  mUsb.SnpsId       = MmioRead32 ((UINTN)(B2L_USB_DWC3_BASE + B2L_USB_DWC3_GSNPSID));
+  mUsb.Gctl         = MmioRead32 ((UINTN)(B2L_USB_DWC3_BASE + B2L_USB_DWC3_GCTL));
+  mUsb.XhciCapLen   = MmioRead32 ((UINTN)(B2L_USB_DWC3_BASE + B2L_USB_XHCI_CAPLEN));
+  mUsb.XhciParams1  = MmioRead32 ((UINTN)(B2L_USB_DWC3_BASE + B2L_USB_XHCI_HCSPARAMS1));
+
+  mUsbValid = TRUE;
+}
+
+/**
+  USB ornegini ekrana bas. Renkler kaba yorumdur:
+    yesil  -> deger makul (GSNPSID 0x5533.., xHCI CAPLENGTH != 0)
+    gri    -> bilinmiyor / notr
+**/
+STATIC
+VOID
+B2LDrawUsb (
+  VOID
+  )
+{
+  if (!mUsbValid) {
+    B2LUiPrint (B2L_UI_KIRMIZI, L"USB     : probe skipped");
+    return;
+  }
+
+  B2LUiPrint (B2L_UI_GRI, L"USB.pmu : %08x %08x", mUsb.PmuPhy, mUsb.PmuPhyDp);
+  B2LUiPrint (B2L_UI_GRI, L"USB.con : %08x %08x", mUsb.UsbconVer, mUsb.UsbconClkrst);
+  B2LUiPrint (
+    ((mUsb.SnpsId & 0xFFFF0000U) == 0x55330000U) ? B2L_UI_YESIL : B2L_UI_GRI,
+    L"USB.dw3 : %08x %08x",
+    mUsb.SnpsId,
+    mUsb.Gctl
+    );
+  B2LUiPrint (
+    ((mUsb.XhciCapLen & 0xFFU) != 0) ? B2L_UI_YESIL : B2L_UI_GRI,
+    L"USB.xhc : %08x %08x",
+    mUsb.XhciCapLen,
+    mUsb.XhciParams1
     );
 }
 
@@ -505,6 +603,8 @@ B2LSelfTest (
   B2LDrawDisplay ();
   B2LDrawMemory ();
   B2LDrawDevices ();
+  B2LUsbRead ();
+  B2LDrawUsb ();
 
   //
   // Surucu teshis protokolu. Once bunu arariz: hem entry asamasini gosterir
@@ -553,8 +653,7 @@ B2LSelfTest (
   }
 
   B2LUiPrint (B2L_UI_BEYAZ, L"--------------------------------------------------------------");
-  B2LUiPrint (B2L_UI_GRI,   L"VolUp=Up VolDown=Down Bixby=Enter");
-  B2LUiPrint (B2L_UI_GRI,   L"Bixby(hold)=Esc  Exit: Bixby+Vol");
+  B2LUiPrint (B2L_UI_GRI,   L"VolUp/Down=Up/Down Bixby=Enter Bixby+Vol=Exit");
   B2LUiPrint (B2L_UI_GRI,   L"Touch.dx hit and Touch.ev co should grow");
   B2LUiPrint (B2L_UI_BEYAZ, L"--------------------------------------------------------------");
 

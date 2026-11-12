@@ -658,6 +658,57 @@ Konfirmasi setelah flash bundle final:
 **Status: sentuh terverifikasi penuh** — koordinat, tombol, dan pelabelan
 status semuanya benar; `beyond2ltePkg` tidak disentuh.
 
+### 6.3 Probe USB (Fase 0): mengukur dulu, belum mengubah
+
+Sentuh selesai. Arah berikutnya yang dipilih adalah **dukungan USB** — masih
+❌ di `README.md` dan di `DEVIR.md` §4.6. Sebelum menulis driver apa pun,
+langkah paling murah dan paling menentukan adalah **mengukur** apakah blok
+USB (DWC3 + PHY) di perangkat ini masih hidup setelah S-Boot menyerahkan
+kendali — S-Boot memang baru saja memakai USB untuk Download Mode.
+
+Layar self-test kini menambah **4 baris baca-saja** (`USB.*`). Tidak ada satu
+register pun yang ditulis; hanya `MmioRead32`.
+
+| Baris | Isi | Alamat |
+| --- | --- | --- |
+| `USB.pmu` | PHY ctrl USBDRD / USBDP | `0x15860000+0x72C`, `+0x704` |
+| `USB.con` | `CTRL_VER`, `CLKRST` USBCON | `0x10B00000+0x00`, `+0x20` |
+| `USB.dw3` | `GSNPSID`, `GCTL` DWC3 | `0x10C00000+0xC120`, `+0xC110` |
+| `USB.xhc` | `CAPLENGTH/HCIVERSION`, `HCSPARAMS1` xHCI | `0x10C00000+0x00`, `+0x04` |
+
+Alamat diambil dari DTB stok S10e di dalam repo
+(`Resources/DTBs/beyond0lte.dts`: `usb@10C00000`, `phy@10B00000`,
+`pmu_offset=0x72c`, `pmu_offset_dp=0x704`) dan konsisten dengan
+`S5E7885Pkg`/`S5E9830Pkg` `PlatformUsbfnLib` yang memakai peta register
+USBCON yang sama. Offset DWC3 (`GSNPSID`/`GCTL`/`GUSB2PHYCFG`) mengikuti
+`SamsungPkg/Include/Device/Dwc3.h`.
+
+Cara membacanya:
+
+- `USB.dw3` `GSNPSID` berawalan `5533` (hijau) → kontroler terjangkau dan
+  ter-clock. Ini indikator tunggal terkuat.
+- `USB.xhc` `CAPLENGTH != 0` (hijau) → blok register xHCI hidup, artinya jalur
+  **host** (keyboard/flashdisk) realistis tanpa kerja clock tambahan.
+- Bila keduanya `0` atau `ffffffff` → blok belum ter-clock/ter-power; langkah
+  berikutnya adalah menyalakan PHY + gate CMU dulu, baru menyentuh DWC3/xHCI.
+
+Untuk menghemat ruang layar, dua baris petunjuk tombol digabung menjadi satu
+(`VolUp/Down=Up/Down Bixby=Enter Bixby+Vol=Exit`); perilaku tombol tidak
+berubah, hanya labelnya.
+
+Bundle probe (build ini):
+
+- `uefi-boot.tar` SHA-256
+  `1fbbdf6f98a299b30e5f2c650dd25944324889c35b282c5f16799139a92c7512`
+- `Mu-beyond0lte.img` SHA-256
+  `ab242841028d94122124d13bd8525eba922103177e74f0b6366edb4ab72aad9d`
+- zip SHA-256
+  `332d2c3d4fcb0d3d5715fc2f30485f001717463b14a0c4eef830832e63b8bc5e`
+
+#### Hasil di perangkat
+
+_(belum diisi — menunggu satu flash di S10e; foto baris `USB.*`)_
+
 ---
 
 ## 7. Rollback
