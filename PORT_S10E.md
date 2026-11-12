@@ -770,6 +770,107 @@ Catatan kosmetik: cek "hijau" di `USB.dw3` v2 hanya menguji `0x5533`, sehingga
 `0x3331` tampil abu. Akan diperlonggar pada build berikutnya (perilaku driver
 tidak berubah; `Dwc3CoreInit()` sudah menerima keduanya).
 
+### 6.4 M1: bring-up pengendali device (DWC3) + probe `USB.dev`
+
+Setelah Fase 0 membuktikan blok USB hidup, jalur yang dipilih adalah **device**
+(bukan host/xHCI). Alasannya: `PRTCAPDIR` sudah `DEVICE`, arsitektur repo
+(`UsbfnDwc3Dxe` + `PlatformUsbfnLib`) langsung mendukung, dan tidak perlu
+mengeluarkan VBUS 5 V ke port (PC yang menyuplai). Kelas gadget target (M2)
+adalah **CDC-ACM serial** (PC melihat `/dev/ttyACM`).
+
+Recon yang mengarahkan bentuk M1:
+
+- `UsbfnDwc3Dxe` (`SamsungPkg/Drivers/UsbfnDwc3Dxe`) sudah ada dan ikut
+  dibangun, tetapi **tidak pernah masuk FV** — tidak terdaftar di
+  `beyond0ltePkg/Include/DXE.inc`.
+- `PlatformUsbfnLib` untuk Exynos 9820 masih dipetakan ke **Null**
+  (`SamsungPkg.dsc.inc`). Belum ada `Silicon/Samsung/S5E9820Pkg/Library/PlatformUsbfnLib`.
+- **Tidak ada satu pun driver kelas gadget** (EEM/RNDIS/MSD/serial) di pohon
+  OSS ini. `UsbMsdDxe`/`UsbDeviceDxe` hanyalah **biner Qualcomm** yang bergantung
+  pada protokol Qualcomm → tidak bisa dipakai ulang. Bagian gadget = tulis dari
+  nol (itu M2).
+- `UsbfnDwc3Dxe` entry hanya *mengalokasi* dan *menerbitkan* protokol. PHY dan
+  core baru dinyalakan ketika sebuah driver kelas memanggil `StartController`
+  (yang di dalamnya memanggil `UsbfnPlatformPhyInit` + `Dwc3CoreInit`).
+  `ConfigureEnableEndpoints` (yang menyetel `DCTL.RUN_STOP`) juga ada di sisi
+  kelas. Jadi M1 = buktikan rantai bring-up lewat `StartController` langsung.
+
+#### Yang ditambahkan
+
+| Berkas | Isi |
+| --- | --- |
+| `Silicon/Samsung/S5E9820Pkg/Library/PlatformUsbfnLib/PlatformUsbRegisters.h` | Peta register 9820: `CTRL_BASE=0x10B00000` (USBCON), `LINK_BASE=0x10C00000` (DWC3), PMU `0x15860000+0x72C`, offset USBCON gaya 7885 (termasuk `SSPPLLCTL 0x30`) |
+| `Silicon/Samsung/S5E9820Pkg/Library/PlatformUsbfnLib/BoardInit.c` | Urutan PHY dari templat 7885/9830; `UsbfnPlatformGetData/PhyInit/PhyExit/IsVbusPresent` |
+| `Silicon/Samsung/S5E9820Pkg/Library/PlatformUsbfnLib/PlatformUsbfnLib.inf` | `FILE_GUID 7E2A5C41-...`; butuh `MemoryAllocationHelperLib` |
+| `S5E9820Pkg.dsc.inc` | `PlatformUsbfnLib` → inf 9820 (menimpa Null) |
+| `beyond0ltePkg/Include/DXE.inc` | `INF SamsungPkg/Drivers/UsbfnDwc3Dxe/UsbfnDwc3Dxe.inf` |
+| `B2LPlatformBootManager.c` | `B2LUsbDevBringUp`/`B2LDrawUsbDev` (`USB.dev`, `USB.ctl`) + cek hijau `GSNPSID` kini menerima `0x3331` |
+
+`beyond2lte` **tidak disentuh**.
+
+#### Keputusan penting: `MapMemoryRegion` (kembali)
+
+Pelajaran dari crash v1 (Data abort, `FAR=0x10B00000`) dipakai lagi di sini:
+`UsbfnPlatformPhyInit()` memanggil `UsbMapRegions()` **sebelum** menyentuh
+register apa pun, memetakan kedua region (`CTRL` dan `LINK`) sebagai
+`EfiMemoryMappedIO`. Bila sudah terpetakan, `MapMemoryRegion` mengembalikan
+`EFI_ALREADY_STARTED`/`EFI_ACCESS_DENIED` — itu dianggap "sudah baik", bukan
+galat. Templat 9830/7885 tidak melakukan ini karena asumsinya MMIO sudah
+terpetakan oleh firmware lain; di S10e S-Boot tidak melakukannya.
+
+Lalu `UsbfnPlatformPhyInit` membaca `CTRL_VER` (USBCON `0x10B00000`) sebagai
+gerbang: `0`/`0xFFFFFFFF` → `EFI_DEVICE_ERROR` (blok PHY tidak hidup), selain itu
+lanjut ke urutan reset PHY.
+
+#### Asumsi M1 yang belum terverifikasi
+
+1. **Clock USB sudah hidup dari S-Boot.** Probe Fase 0 berhasil membaca
+   `CTRL_VER=0x00030000`, jadi blok USBCON terjangkau; CMU/PLL 9820
+   (CMU `0x1A240000`, gate `aclk`/`sclk`) **sengaja dilewati** dulu. Bila PHY
+   tidak bangkit, langkah berikutnya adalah menambah bring-up CMU/PLL.
+2. **Tuning HSP dilewati.** Node `usb_hs_tune`/`usb_ss_tune` di DTB stok
+   berstatus `"disabled"`, jadi nilai tune tidak diterapkan pada putaran ini.
+3. **`HSP_FSV_OUT_EN`** (7885 BIT24) sengaja tidak disentuh.
+4. `MaximumSpeed = High`, `SuperSpeedPhyDisabled = TRUE`, UTMI 16-bit — USB 2.0
+   dulu. SuperSpeed (combo PHY USB3 + SS PLL + PIPE3) menyusul bila perlu.
+
+#### Apa yang diharapkan di layar
+
+Dua baris baru menggantikan cek kosmetik lama:
+
+```
+USB.dev : st=Success
+USB.ctl : <GCTL> <DCTL> <DSTS>
+```
+
+- `st=` adalah hasil `StartController` (hijau bila sukses). `st=Success`
+  berarti `UsbfnPlatformPhyInit` + `Dwc3CoreInit` selesai tanpa galat.
+- `USB.ctl` GCTL seharusnya tetap `PRTCAPDIR=DEVICE` (2). `DCTL.RUN_STOP`
+  kemungkinan masih **0** dan `DSTS` menunjukkan halted, karena **belum ada
+  yang connect/enable endpoint** — itu tugas driver kelas (M2). Jadi M1
+  membuktikan **bring-up**, bukan enumerasi.
+- Bila `st=` galat atau `DCTL`/`DSTS` `0xffffffff` → iterasi
+  `BoardInit.c` (tambah CMU/PLL, atau setel dari DTB).
+
+#### Bundel flash (M1)
+
+`bash tools_flash_bundle.sh -d beyond0lte -o ~/Downloads`
+
+| Berkas | SHA-256 |
+| --- | --- |
+| `~/Downloads/beyond0lte-flash/uefi-boot.tar` | `7c0df366197f969440a3ccfd07b5a88c772b5570c97072a684c4fd0f373b7671` |
+| `~/Downloads/beyond0lte-flash/Mu-beyond0lte.img` | `af88cb69931ffc3f881de8739f6987b1fb3cf4998d14e3868a07e112f027ee08` |
+| `~/Downloads/beyond0lte-flash.zip` | `5f140c8b9edbd6d96e137a67fa85a2e4602175c86908e3c83821c726511bb634` |
+
+Build: `YAP_RC=0`, **67 image**. `UsbfnDwc3Dxe` (GUID
+`0BF8B0C9-30E6-4E2A-9E1D-5F6C1A47D3B2`) ada di `FVMAIN` offset `0x000F2630`.
+`PlatformUsbfnLib` 9820 (`BoardInit.obj`) terkompilasi; string `USB.dev`/`USB.ctl`
+ada di `BdsDxe.efi`.
+
+> **Catatan FVMAIN:** `TOTAL=0x42f000`, `TAKEN=0x42ecb0` — sisa hanya ~0x350.
+> Setiap penambahan modul ke `FVMAIN` berikutnya hampir pasti butuh
+> memindahkan/menghapus modul lain lebih dulu.
+
 ---
 
 ## 7. Rollback
