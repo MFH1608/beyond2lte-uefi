@@ -29,6 +29,7 @@
 [Protocols]
   gEfiAbsolutePointerProtocolGuid
   gEfiHsI2cProtocolGuid
+  gEfiPmicRegulatorProtocolGuid
 
 [Depex]
   gEfiHsI2cProtocolGuid

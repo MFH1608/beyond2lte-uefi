@@ -1,10 +1,10 @@
 /** @file
-  Samsung sec_ts touchscreen driver for Galaxy S10+ (beyond0lte).
+  Samsung sec_ts touchscreen driver for Galaxy S10e (beyond0lte).
 
   The stock device tree places sec_ts at address 0x48 on HSI2C10 and reports
   12-bit coordinates.  This DXE driver exposes the first supported contact as
-  EFI_ABSOLUTE_POINTER_PROTOCOL.  It neither updates firmware nor power-cycles
-  the boot-on touchscreen regulators.
+  EFI_ABSOLUTE_POINTER_PROTOCOL.  It powers the tsp_io/tsp_avdd rails through
+  the PMIC regulator protocol but does not touch panel firmware.
 **/
 
 #include <Uefi.h>
@@ -16,6 +16,9 @@
 #include <Library/UefiDriverEntryPoint.h>
 
 #include <Protocol/AbsolutePointer.h>
+#include <Protocol/EFIPmicRegulator.h>
+
+#include <Device/Pmic.h>
 
 #include "B2LHsI2c.h"
 #include "B2LSecTsParser.h"
@@ -80,6 +83,115 @@ STATIC B2L_TOUCH_DIAG_PROTOCOL  mTouchDiag;
 
 STATIC CONST EFI_GUID  mB2LTouchDiagProtocolGuid = B2L_TOUCH_DIAG_PROTOCOL_GUID;
 
+//
+// Dokunma guc raylari (dts fragment@32, s2mps19mfd):
+//   tsp_io   = LDO19M -> S2MPS19 LDO19, 1.8 V
+//   tsp_avdd = LDO27M -> S2MPS19 LDO27, 3.0 V
+// Her ikisi de "regulator-boot-on"; bootloader acmadiysa I2C hatti panel
+// uyanmadan NACK verir. APRIORI'de PmicDxe B2LTouchDxe'den ONCE gelir, ama
+// yine de entry aninda protokol yoksa Reset(TRUE) bir kez daha dener.
+//
+#define B2L_TOUCH_PMIC_LDO_IO    19
+#define B2L_TOUCH_PMIC_LDO_AVDD  27
+#define B2L_TOUCH_IO_UV          1800000U
+#define B2L_TOUCH_AVDD_UV        3000000U
+#define B2L_TOUCH_POWER_ON_US    100000U   // panelin uyanmasi icin bekleme
+
+/**
+  Basarisiz komut/transfer sonrasi teshis alanlarini doldurur: gercek
+  EFI_STATUS, HSI2C10 durum registerlari ve (ilk kez) adres taramasi.
+**/
+STATIC
+VOID
+B2LTouchRecordFailure (
+  IN EFI_STATUS  Status
+  )
+{
+  UINT32  IntStatus;
+  UINT32  TransStatus;
+
+  mTouchDiag.Diag.LastStatus = (UINT64)(UINTN)Status;
+
+  B2LHsI2cSnapshot (&IntStatus, &TransStatus);
+  mTouchDiag.Diag.IntStatus   = IntStatus;
+  mTouchDiag.Diag.TransStatus = TransStatus;
+
+  if (!mTouchDiag.Diag.ScanDone) {
+    B2LHsI2cScan (mTouchDiag.Diag.ScanAck);
+    mTouchDiag.Diag.ScanDone = 1;
+  }
+}
+
+/**
+  tsp_io/tsp_avdd raylarini ayarlayip acar. PMIC regulator protokolu
+  yoksa (ornegin APRIORI'de PmicDxe'den once) sessizce basarisiz olur;
+  ekran bunu Touch.pm satirinda gosterir. Idempotenttir.
+**/
+STATIC
+EFI_STATUS
+B2LTouchPowerOn (
+  VOID
+  )
+{
+  EFI_PMIC_REGULATOR_PROTOCOL  *Regulator;
+  EFI_STATUS                    Status;
+  UINT32                        Microvolts;
+
+  if (mTouchDiag.Diag.PmicLocate == B2L_TOUCH_PMIC_FOUND) {
+    // Daha once bulundu; sonucu tekrar kullan.
+    return (mTouchDiag.Diag.PowerOk != 0) ? EFI_SUCCESS : EFI_NOT_READY;
+  }
+
+  Status = gBS->LocateProtocol (
+                  &gEfiPmicRegulatorProtocolGuid,
+                  NULL,
+                  (VOID **)&Regulator
+                  );
+  if (EFI_ERROR (Status) || (Regulator == NULL)) {
+    mTouchDiag.Diag.PmicLocate = (UINT32)(UINTN)Status;
+    return Status;
+  }
+
+  mTouchDiag.Diag.PmicLocate = B2L_TOUCH_PMIC_FOUND;
+
+  // Once gerilimi, sonra enable'i ayarla (SetLdoVoltage enable bitine
+  // dokunmaz, SetLdo yalnizca mod bitlerini yazar).
+  Regulator->SetLdoVoltage (ID_S2MPS19, B2L_TOUCH_PMIC_LDO_IO, B2L_TOUCH_IO_UV);
+  Regulator->SetLdoVoltage (ID_S2MPS19, B2L_TOUCH_PMIC_LDO_AVDD, B2L_TOUCH_AVDD_UV);
+
+  Status = Regulator->SetLdo (
+                        ID_S2MPS19,
+                        B2L_TOUCH_PMIC_LDO_IO,
+                        S2MPS_MODE_NORMAL,
+                        TRUE
+                        );
+  mTouchDiag.Diag.LdoSetOk[0] = EFI_ERROR (Status) ? 0 : 1;
+
+  Status = Regulator->SetLdo (
+                        ID_S2MPS19,
+                        B2L_TOUCH_PMIC_LDO_AVDD,
+                        S2MPS_MODE_NORMAL,
+                        TRUE
+                        );
+  mTouchDiag.Diag.LdoSetOk[1] = EFI_ERROR (Status) ? 0 : 1;
+
+  if (!EFI_ERROR (Regulator->GetLdoVoltage (ID_S2MPS19, B2L_TOUCH_PMIC_LDO_IO, &Microvolts))) {
+    mTouchDiag.Diag.LdoUv[0] = Microvolts;
+  }
+
+  if (!EFI_ERROR (Regulator->GetLdoVoltage (ID_S2MPS19, B2L_TOUCH_PMIC_LDO_AVDD, &Microvolts))) {
+    mTouchDiag.Diag.LdoUv[1] = Microvolts;
+  }
+
+  mTouchDiag.Diag.PowerOk = (mTouchDiag.Diag.LdoSetOk[0] &&
+                             mTouchDiag.Diag.LdoSetOk[1]) ? 1 : 0;
+
+  // Raylar yeni acildiysa panelin firmware'i ayaga kalksin.
+  gBS->Stall (B2L_TOUCH_POWER_ON_US);
+
+  return mTouchDiag.Diag.PowerOk ? EFI_SUCCESS : EFI_DEVICE_ERROR;
+}
+
 STATIC
 EFI_STATUS
 ReadCommand (
@@ -88,7 +200,14 @@ ReadCommand (
   IN  UINTN  DataLength
   )
 {
-  return B2LHsI2cWriteRead (&Command, 1, Data, DataLength);
+  EFI_STATUS  Status;
+
+  Status = B2LHsI2cWriteRead (&Command, 1, Data, DataLength);
+  if (EFI_ERROR (Status)) {
+    B2LTouchRecordFailure (Status);
+  }
+
+  return Status;
 }
 
 STATIC
@@ -97,7 +216,14 @@ WriteCommand (
   IN UINT8  Command
   )
 {
-  return B2LHsI2cWriteRead (&Command, 1, NULL, 0);
+  EFI_STATUS  Status;
+
+  Status = B2LHsI2cWriteRead (&Command, 1, NULL, 0);
+  if (EFI_ERROR (Status)) {
+    B2LTouchRecordFailure (Status);
+  }
+
+  return Status;
 }
 
 STATIC
@@ -108,7 +234,8 @@ WriteCommandData (
   IN UINTN        DataLength
   )
 {
-  UINT8  Buffer[4];
+  UINT8       Buffer[4];
+  EFI_STATUS  Status;
 
   if (DataLength > (sizeof (Buffer) - 1)) {
     return EFI_INVALID_PARAMETER;
@@ -119,7 +246,12 @@ WriteCommandData (
     CopyMem (&Buffer[1], Data, DataLength);
   }
 
-  return B2LHsI2cWriteRead (Buffer, DataLength + 1, NULL, 0);
+  Status = B2LHsI2cWriteRead (Buffer, DataLength + 1, NULL, 0);
+  if (EFI_ERROR (Status)) {
+    B2LTouchRecordFailure (Status);
+  }
+
+  return Status;
 }
 
 STATIC
@@ -287,6 +419,8 @@ ProbeController (
   BOOLEAN     AllOnes;
   EFI_STATUS  Status;
 
+  mTouchDiag.Diag.ProbeCalls++;
+
   Status = ReadCommand (SEC_TS_READ_DEVICE_ID, DeviceId, sizeof (DeviceId));
   if (!EFI_ERROR (Status)) {
     CopyMem (mTouchDiag.Diag.DeviceId, DeviceId, sizeof (DeviceId));
@@ -364,6 +498,15 @@ TouchReset (
   if (This != &mTouch.Protocol) {
     return EFI_INVALID_PARAMETER;
   }
+
+  mTouchDiag.Diag.ResetCalls++;
+
+  //
+  // Dokunma guc raylarini her Reset'te yeniden uygula. Entry sirasinda
+  // (APRIORI) PmicDxe henuz yuklenmemis olabilir; self-test ekrani
+  // Reset(TRUE)'yu tum suruculer yuklendikten sonra cagirir.
+  //
+  B2LTouchPowerOn ();
 
   ZeroMem (&mTouch.Pointer, sizeof (mTouch.Pointer));
   mTouch.QueueHead        = 0;
@@ -536,7 +679,9 @@ B2LTouchEntry (
   // gercek durum Stage/EntryStatus alanlarindan okunur.
   //
   ZeroMem (&mTouchDiag, sizeof (mTouchDiag));
-  mTouchDiag.Diag.Stage = B2L_TOUCH_STAGE_ENTRY;
+  mTouchDiag.Diag.Signature = B2L_TOUCH_DIAG_SIGNATURE;
+  mTouchDiag.Diag.Size      = (UINT32)sizeof (B2L_TOUCH_DIAG);
+  mTouchDiag.Diag.Stage     = B2L_TOUCH_STAGE_ENTRY;
   Status = gBS->InstallProtocolInterface (
                   &ImageHandle,
                   (EFI_GUID *)(VOID *)&mB2LTouchDiagProtocolGuid,
@@ -606,6 +751,7 @@ B2LTouchEntry (
   mTouchDiag.Diag.AbsPointer = (UINT64)(UINTN)&mTouch.Protocol;
 
   mTouchDiag.Diag.Stage = B2L_TOUCH_STAGE_PROBE;
+  B2LTouchPowerOn ();
   Status = ProbeController ();
   mTouchDiag.Diag.EntryStatus = (UINT64)(UINTN)Status;
   if (EFI_ERROR (Status)) {

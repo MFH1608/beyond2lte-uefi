@@ -51,25 +51,46 @@
 
 #define B2L_TOUCH_DIAG_EVENT_SIZE  8
 
+#define B2L_TOUCH_DIAG_SIGNATURE  0x31474442U   // "BDG1"
+
+//
+// Surucu ile ayni asama numaralari (bkz. B2LTouchDiag.h). "done" asamasina
+// ulastiysa entry/probe/bring-up zinciri tamamlanmis demektir.
+//
+#define B2L_TOUCH_STAGE_DONE      7
+
 typedef struct {
+  UINT32  Signature;
+  UINT32  Size;
   UINT32  Stage;
-  UINT32  EntryStatus;
+  UINT32  PmicLocate;
+  UINT64  EntryStatus;
   UINT64  AbsPointer;
-  UINT8   DeviceId[5];
-  UINT8   Integrity;
-  UINT8   BootStatus;
+  UINT64  LastStatus;
   UINT32  Polls;
   UINT32  Empty;
   UINT32  Errors;
   UINT32  StatusEvents;
   UINT32  CoordEvents;
   UINT32  Ignored;
+  UINT32  LdoUv[2];
+  UINT32  IntStatus;
+  UINT32  TransStatus;
+  UINT32  ScanAck[4];
+  UINT8   DeviceId[5];
+  UINT8   Integrity;
+  UINT8   BootStatus;
+  UINT8   ResetCalls;
+  UINT8   ProbeCalls;
+  UINT8   PowerOk;
+  UINT8   ScanDone;
+  UINT8   LdoSetOk[2];
   UINT8   LastEvent[B2L_TOUCH_DIAG_EVENT_SIZE];
   UINT8   FnBefore[2];
   UINT8   FnAfter[2];
   UINT8   PowerMode;
   UINT8   BringUpOk;
-  UINT8   Reserved[3];
+  UINT8   Reserved[5];
 } B2L_TOUCH_DIAG;
 
 typedef struct {
@@ -426,6 +447,7 @@ B2LSelfTest (
   EFI_INPUT_KEY                  Key;
   B2L_TOUCH_DIAG_PROTOCOL        *TouchDiag;
   BOOLEAN                        HasTouch;
+  BOOLEAN                        DiagOk;
   BOOLEAN                        Exit;
   EFI_STATUS                     TouchStatus;
   UINT32                         TouchPolls;
@@ -435,7 +457,9 @@ B2LSelfTest (
   CHAR16                         LastTouch[80];
 
   HasTouch    = FALSE;
+  DiagOk      = FALSE;
   Exit        = FALSE;
+  Abs         = NULL;
   TouchStatus = EFI_NOT_READY;
   TouchPolls  = 0;
   TouchHits   = 0;
@@ -485,47 +509,27 @@ B2LSelfTest (
   // protokolla konusmak zorunda: ConSplitter mode'u 0x10000 (65536) ve
   // bizim surucumuz oraya bagli degil.
   //
+  // Signature/Size, iki modulde elle tutulan yerlesimin ayni oldugunu
+  // dogrular; tutmazsa teshis alanlari okunmaz.
+  //
   Status = gBS->LocateProtocol (
                   (EFI_GUID *)(VOID *)&mB2LTouchDiagGuid,
                   NULL,
                   (VOID **)&TouchDiag
                   );
-  if (EFI_ERROR (Status) || (TouchDiag == NULL)) {
-    TouchDiag = NULL;
-    B2LUiPrint (B2L_UI_KIRMIZI, L"Touch.fn: no diag protocol");
-  } else {
-    B2LUiPrint (
-      (TouchDiag->Diag.Stage == 7) ? B2L_UI_YESIL : B2L_UI_KIRMIZI,
-      L"Touch.entry: stage=%u st=%r",
-      TouchDiag->Diag.Stage,
-      (EFI_STATUS)(UINTN)TouchDiag->Diag.EntryStatus
-      );
-    B2LUiPrint (
-      B2L_UI_BEYAZ,
-      L"Touch.id: %02x %02x %02x %02x %02x i=%02x b=%02x",
-      TouchDiag->Diag.DeviceId[0],
-      TouchDiag->Diag.DeviceId[1],
-      TouchDiag->Diag.DeviceId[2],
-      TouchDiag->Diag.DeviceId[3],
-      TouchDiag->Diag.DeviceId[4],
-      TouchDiag->Diag.Integrity,
-      TouchDiag->Diag.BootStatus
-      );
-    B2LUiPrint (
-      TouchDiag->Diag.BringUpOk ? B2L_UI_YESIL : B2L_UI_KIRMIZI,
-      L"Touch.fn: be=%02x%02x af=%02x%02x pm=%02x ok=%u",
-      TouchDiag->Diag.FnBefore[0],
-      TouchDiag->Diag.FnBefore[1],
-      TouchDiag->Diag.FnAfter[0],
-      TouchDiag->Diag.FnAfter[1],
-      TouchDiag->Diag.PowerMode,
-      TouchDiag->Diag.BringUpOk
-      );
+  if (!EFI_ERROR (Status) &&
+      (TouchDiag != NULL) &&
+      (TouchDiag->Diag.Signature == B2L_TOUCH_DIAG_SIGNATURE) &&
+      (TouchDiag->Diag.Size == (UINT32)sizeof (B2L_TOUCH_DIAG)))
+  {
+    DiagOk = TRUE;
 
     if (TouchDiag->Diag.AbsPointer != 0) {
       Abs      = (EFI_ABSOLUTE_POINTER_PROTOCOL *)(UINTN)TouchDiag->Diag.AbsPointer;
       HasTouch = TRUE;
     }
+  } else {
+    TouchDiag = NULL;
   }
 
   if (!HasTouch) {
@@ -533,36 +537,22 @@ B2LSelfTest (
     HasTouch = !EFI_ERROR (Status);
   }
 
-  B2LUiPrint (
-    HasTouch ? B2L_UI_YESIL : B2L_UI_KIRMIZI,
-    L"Touch   : %a",
-    HasTouch ? "AbsolutePointer present" : "none"
-    );
-  if (HasTouch && (Abs->Mode != NULL)) {
-    B2LUiPrint (
-      B2L_UI_BEYAZ,
-      L"Touch.m : %u x %u",
-      (UINT32)Abs->Mode->AbsoluteMaxX,
-      (UINT32)Abs->Mode->AbsoluteMaxY
-      );
-  }
-
   //
-  // Surucu entry'de bring-up yapmisti; ama o an (APRIORI) PmicDxe gibi
-  // suruculer henuz yuklenmemis olabilir. Self-test baslarken bizim
-  // protokolumuz uzerinden bir kez daha reset/bring-up denemek denetleyiciyi
-  // tarama moduna alabilir. Basarisiz olsa da ekran calismaya devam eder.
+  // Surucu entry'de bring-up yapmisti; ama entry APRIORI sirasinda calisir ve
+  // o an tsp_io/tsp_avdd raylarini acan PmicDxe yuklu olmayabilir, yani
+  // panel I2C'ye hic yanit vermemis olabilir. Self-test baslarken tum DXE
+  // suruculeri yuklendigi icin Reset(TRUE) bir kez daha guc + bring-up
+  // dener. Basarisiz olsa da ekran calismaya devam eder.
   //
-  if (HasTouch && (TouchDiag != NULL) &&
-      (TouchDiag->Diag.AbsPointer != 0) && (Abs->Reset != NULL))
-  {
+  if (HasTouch && (Abs->Reset != NULL)) {
     Abs->Reset (Abs, TRUE);
   }
 
   B2LUiPrint (B2L_UI_BEYAZ, L"--------------------------------------------------------------");
   B2LUiPrint (B2L_UI_GRI,   L"VolUp=Up VolDown=Down Bixby=Enter");
   B2LUiPrint (B2L_UI_GRI,   L"Bixby(hold)=Esc  Exit: Bixby+Vol");
-  B2LUiPrint (B2L_UI_GRI,   L"Touch panel: Touch.dx hit should grow");
+  B2LUiPrint (B2L_UI_GRI,   L"Touch.dx hit and Touch.ev co should grow");
+  B2LUiPrint (B2L_UI_BEYAZ, L"--------------------------------------------------------------");
 
   //
   // Statik bolge buraya kadar cizildi. Asagisi her karede temizlenip
@@ -634,37 +624,95 @@ B2LSelfTest (
       }
     }
 
-    B2LUiPrint (B2L_UI_BEYAZ, L"Key     : %s", LastKey);
-    B2LUiPrint (HasTouch ? B2L_UI_YESIL : B2L_UI_GRI, L"Touch   : %s", LastTouch);
-
-    if (HasTouch) {
+    //
+    // Teshis blogu. Her satir surucunun doldurdugu bir alani gosterir; amac
+    // tek flash'ta "I2C mi, guc mu, parser mi" ayrimini ekrandan okumak.
+    // Sozlesme (Signature/Size) tutmazsa blok hic cizilmez.
+    //
+    if (DiagOk) {
       B2LUiPrint (
-        EFI_ERROR (TouchStatus) ? B2L_UI_SARI : B2L_UI_YESIL,
-        L"Touch.dx: st=%r poll=%u hit=%u",
-        TouchStatus,
-        (UINT32)TouchPolls,
-        (UINT32)TouchHits
+        (TouchDiag->Diag.Stage == B2L_TOUCH_STAGE_DONE) ? B2L_UI_YESIL : B2L_UI_KIRMIZI,
+        L"Touch.ent: stage=%u",
+        TouchDiag->Diag.Stage
         );
-    }
-
-    if (TouchDiag != NULL) {
-      //
-      // Teshis: poll=denetleyici okuma sayisi, empty=FIFO bos, err=I2C hatasi,
-      // st=status/gesture olayi, co=koordinat olayi, ig=parse edilip
-      // kuyruga girmeyen. co artip hit artmiyorsa parser sorunlu; co=0 ama
-      // poll artiyorsa denetleyici hala olay uretmiyor (~touch function).
-      // Iki satira bolundu: buyuk yazida satir genisligi ~44 karakter.
-      //
+      B2LUiPrint (
+        !EFI_ERROR ((EFI_STATUS)(UINTN)TouchDiag->Diag.EntryStatus) ? B2L_UI_YESIL : B2L_UI_SARI,
+        L"Touch.ent: st=%r",
+        (EFI_STATUS)(UINTN)TouchDiag->Diag.EntryStatus
+        );
+      B2LUiPrint (
+        B2L_UI_BEYAZ,
+        L"Touch.id : %02x %02x %02x %02x %02x",
+        TouchDiag->Diag.DeviceId[0],
+        TouchDiag->Diag.DeviceId[1],
+        TouchDiag->Diag.DeviceId[2],
+        TouchDiag->Diag.DeviceId[3],
+        TouchDiag->Diag.DeviceId[4]
+        );
       B2LUiPrint (
         B2L_UI_GRI,
-        L"Touch.ev: poll=%u empty=%u err=%u",
+        L"Touch.id : iv=%02x bs=%02x rc=%u pc=%u",
+        TouchDiag->Diag.Integrity,
+        TouchDiag->Diag.BootStatus,
+        TouchDiag->Diag.ResetCalls,
+        TouchDiag->Diag.ProbeCalls
+        );
+      B2LUiPrint (
+        TouchDiag->Diag.BringUpOk ? B2L_UI_YESIL : B2L_UI_KIRMIZI,
+        L"Touch.fn : be=%02x%02x af=%02x%02x ok=%u",
+        TouchDiag->Diag.FnBefore[0],
+        TouchDiag->Diag.FnBefore[1],
+        TouchDiag->Diag.FnAfter[0],
+        TouchDiag->Diag.FnAfter[1],
+        TouchDiag->Diag.BringUpOk
+        );
+      B2LUiPrint (
+        TouchDiag->Diag.PowerOk ? B2L_UI_YESIL : B2L_UI_KIRMIZI,
+        L"Touch.pm : loc=%u set=%u%u pwr=%u",
+        TouchDiag->Diag.PmicLocate,
+        TouchDiag->Diag.LdoSetOk[0],
+        TouchDiag->Diag.LdoSetOk[1],
+        TouchDiag->Diag.PowerOk
+        );
+      B2LUiPrint (
+        B2L_UI_BEYAZ,
+        L"Touch.pm : io=%u av=%u uV",
+        TouchDiag->Diag.LdoUv[0],
+        TouchDiag->Diag.LdoUv[1]
+        );
+      B2LUiPrint (
+        (TouchDiag->Diag.LastStatus == 0) ? B2L_UI_YESIL : B2L_UI_KIRMIZI,
+        L"Touch.err: %r",
+        (EFI_STATUS)(UINTN)TouchDiag->Diag.LastStatus
+        );
+      B2LUiPrint (
+        B2L_UI_GRI,
+        L"Touch.di : int=%08x tr=%08x",
+        TouchDiag->Diag.IntStatus,
+        TouchDiag->Diag.TransStatus
+        );
+      B2LUiPrint (
+        B2L_UI_GRI,
+        L"Touch.sc : %08x %08x",
+        TouchDiag->Diag.ScanAck[0],
+        TouchDiag->Diag.ScanAck[1]
+        );
+      B2LUiPrint (
+        B2L_UI_GRI,
+        L"Touch.sc : %08x %08x",
+        TouchDiag->Diag.ScanAck[2],
+        TouchDiag->Diag.ScanAck[3]
+        );
+      B2LUiPrint (
+        B2L_UI_GRI,
+        L"Touch.ev : p=%u e=%u x=%u",
         TouchDiag->Diag.Polls,
         TouchDiag->Diag.Empty,
         TouchDiag->Diag.Errors
         );
       B2LUiPrint (
         B2L_UI_GRI,
-        L"Touch.ev: st=%u co=%u ig=%u",
+        L"Touch.ev : s=%u c=%u i=%u",
         TouchDiag->Diag.StatusEvents,
         TouchDiag->Diag.CoordEvents,
         TouchDiag->Diag.Ignored
@@ -680,6 +728,30 @@ B2LSelfTest (
         TouchDiag->Diag.LastEvent[5],
         TouchDiag->Diag.LastEvent[6],
         TouchDiag->Diag.LastEvent[7]
+        );
+    } else {
+      B2LUiPrint (B2L_UI_KIRMIZI, L"Touch.diag: no protocol/layout");
+    }
+
+    if (HasTouch && (Abs->Mode != NULL)) {
+      B2LUiPrint (
+        B2L_UI_BEYAZ,
+        L"Touch.m : %u x %u",
+        (UINT32)Abs->Mode->AbsoluteMaxX,
+        (UINT32)Abs->Mode->AbsoluteMaxY
+        );
+    }
+
+    B2LUiPrint (B2L_UI_BEYAZ, L"Key     : %s", LastKey);
+    B2LUiPrint (HasTouch ? B2L_UI_YESIL : B2L_UI_GRI, L"Touch   : %s", LastTouch);
+
+    if (HasTouch) {
+      B2LUiPrint (
+        EFI_ERROR (TouchStatus) ? B2L_UI_SARI : B2L_UI_YESIL,
+        L"Touch.dx: st=%r poll=%u hit=%u",
+        TouchStatus,
+        (UINT32)TouchPolls,
+        (UINT32)TouchHits
         );
     }
 

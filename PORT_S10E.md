@@ -502,6 +502,78 @@ digambar sebagai blok 3x3 ke framebuffer (cara yang sama dipakai
 `B2LGoster`), supaya mudah difoto.
 **Status: menunggu hasil flash `c97d78f`** (hasil akan dicatat di sini).
 
+#### Perbaikan transport I2C + daya rail (build ini)
+
+Hasil `c97d78f` di perangkat: `Touch.entry: stage=4 st=Warning Reset Require`,
+`Touch.id` semua nol, `Touch.fn be=0000`, `Touch.dx st=Device Error poll=8
+hit=0`, `Touch.ev poll=8 empty=0 err=8`, dan log `B2LTouch: HSI2C10 transfer
+failed: Time out`. Artinya I2C sudah jalan sampai `sec_ts`, tetapi chip
+**tidak pernah menjawab** (NACK/timeout), bukan masalah event loop.
+
+Akar masalahnya urutan APRIORI: `B2LTouchDxe` berjalan **sebelum**
+`PmicDxe`, padahal rail daya sentuh dipegang S2MPS19 lewat `PmicDxe`.
+Selama `tsp_io`/`tsp_avdd` mati, panel tidak memberi ACK sehingga setiap
+transfer time-out.
+
+Perubahan pada build ini (tetap hanya `beyond0ltePkg`):
+
+1. **APRIORI**: `PmicDxe` dipindah **sebelum** `B2LTouchDxe`
+   (`Include/APRIORI.inc`). Urutan di dalam FV terverifikasi: PMIC (indeks
+   14) mendahului Touch (indeks 15).
+2. **Transport memakai protokol resmi**: `B2LHsI2c.c` tidak lagi menulis
+   register HSI2C secara manual, tetapi memakai
+   `EFI_HSI2C_PROTOCOL` (`ReadBuffer`/`WriteBuffer`). Jalur ini sudah
+   teruji dan membedakan NACK (`EFI_NO_RESPONSE`) dari timeout
+   (`EFI_TIMEOUT`), sesuatu yang hilang pada implementasi manual lama.
+3. **Driver menyalakan rail sendiri**: `B2LTouchPowerOn()` (di `TouchReset`
+   dan sebelum probe pada `entry`) memakai
+   `EFI_PMIC_REGULATOR_PROTOCOL`: `tsp_io` = S2MPS19 LDO19 @1.8 V,
+   `tsp_avdd` = S2MPS19 LDO27 @3.0 V, mode `NORMAL`, lalu baca balik
+   tegangannya. Jadi rail benar-benar menyala walau bootloader melewatinya.
+4. **Diagnostik diperluas**: `B2L_TOUCH_DIAG` kini 128 byte dengan
+   `Signature`/`Size` (dua modul harus sama; kalau tidak, layar mencetak
+   `Touch.diag: no protocol/layout`). Ditambah: `PmicLocate`, `LdoUv[2]`,
+   `LdoSetOk[2]`, `PowerOk`, `LastStatus`, snapshot `IntStatus`/
+   `TransStatus` HSI2C, dan peta ACK `ScanAck` (scan alamat `0x08..0x77`).
+5. **Layar self-test** mencetak baris diagnostik dinamis baru.
+
+Baris baru dan artinya:
+
+| Baris | Arti |
+| --- | --- |
+| `Touch.ent: stage` | tahap terakhir yang dicoba (7 = seluruh entry selesai) |
+| `Touch.ent: st` | `EFI_STATUS` tahap tersebut |
+| `Touch.id` | Device ID `sec_ts` (`00 00 ...` = bus tetap tidak menjawab) |
+| `Touch.id: iv/bs/rc/pc` | firmware integrity, boot status, jumlah Reset/Probe |
+| `Touch.fn` | isi register `0x30` sebelum/sesudah bring-up + sukses |
+| `Touch.pm: loc` | 0 = belum dicoba, 1 = protokol regulator ketemu, lain = kode error |
+| `Touch.pm: set/pwr` | hasil `SetLdo` untuk LDO19/LDO27 dan status daya gabungan |
+| `Touch.pm: io/av` | tegangan terbaca LDO19/LDO27 (µV) |
+| `Touch.err` | `EFI_STATUS` transfer gagal terakhir (`Success` = belum ada yang gagal) |
+| `Touch.di: int/tr` | register `INT_STATUS`/`TRANS_STATUS` HSI2C10 saat gagal |
+| `Touch.sc` | bitmask alamat `0x08..0x77` yang memberi ACK (bit j = alamat j) |
+| `Touch.ev: p/e/x` | jumlah poll, FIFO kosong, error I2C |
+| `Touch.ev: s/c/i` | event status, event koordinat, event diabaikan |
+| `Touch.raw` | 8 byte terakhir dari FIFO |
+
+Cara membaca cepat:
+
+- `Touch.diag: no protocol/layout` → dua definisi struct tidak sinkron
+  (bug build), bukan masalah perangkat keras.
+- `Touch.pm: pwr=0` → rail tidak menyala; lihat `loc`/`set`/`io`/`av`.
+- `Touch.pm: pwr=1` tetapi `Touch.err` masih `Timeout`/`No Response` dan
+  `Touch.sc` tidak menyalakan bit `48` → bus benar tetapi panel tetap diam
+  (kemungkinan perlu reset GPIO / urutan power yang berbeda).
+- `Touch.sc` menyalakan bit selain `48` → alamat/registrasi kontroler salah.
+- `Touch.err: Success` + `Touch.ev: c` naik saat disentuh → jalur sentuh hidup.
+
+Bundle build ini: `uefi-boot.tar` SHA-256
+`8be69d0aa7d710428103a2019ea4cd2eeeb1682c47f6886d9116392958c5d609`,
+`Mu-beyond0lte.img` SHA-256
+`27fe60a9fd6eb1371fb1b13b8d4e4fcb5c67492be344c303d8b51aae8a027d26`
+(zip `3a9be4733282dc7ede0cf51f00fdd39ee962e2386415bba98b6f9239d7f71fb9`).
+**Status: menunggu hasil flash** (hasil akan dicatat di baris berikutnya).
+
 ---
 
 ## 7. Rollback
