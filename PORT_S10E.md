@@ -852,6 +852,40 @@ USB.ctl : <GCTL> <DCTL> <DSTS>
 - Bila `st=` galat atau `DCTL`/`DSTS` `0xffffffff` → iterasi
   `BoardInit.c` (tambah CMU/PLL, atau setel dari DTB).
 
+#### Hasil di perangkat (M1)
+
+Flash di S10e: **`st=Success`** (hijau) dan `USB.ctl` menunjukkan nilai
+bermakna, bukan `0xffffffff`:
+
+```
+USB.dev : st=Success
+USB.ctl : 30C12004 00F00000 00D20001
+```
+
+Decode (`Dwc3.h`):
+
+- **GCTL = `0x30C12004`** → `PRTCAPDIR` (bit 13:12) = `0b10` = **2 = DEVICE**;
+  `U2EXIT_LFPS` (bit 2) set; `U2RSTECN` (bit 16) set. Sama dengan probe Fase 0 →
+  `Dwc3CoreInit` memang menegakkan DEVICE, dan memang sudah DEVICE.
+- **DCTL = `0x00F00000`** → `RUN_STOP` (bit 31) = **0**, `CSFTRST` (bit 30) = 0,
+  `KEEP_CONNECT` (bit 19) = 0. Kontroler **berhenti** — persis yang diharapkan
+  karena belum ada driver kelas yang memanggil `ConfigureEnableEndpoints`
+  (bit 20..23 yang menyala adalah default pasca-reset, di luar daftar define).
+- **DSTS = `0x00D20001`** → `CONNECTSPD` (bit 2:0) = `1` = **Full Speed**;
+  `USBLNKST` (bit 21:18) = `4` = **`HS_DISCONNECTED`**; `RXFIFOEMPTY` (bit 17)
+  = 1; `DEVCTRLHLT` (bit 22) = 0; `COREIDLE` (bit 23) = 0. Belum ada link
+  partner aktif (kontroler tidak connect).
+
+Catatan: `USB.pmu`/`USB.con`/`USB.dw3`/`USB.xhc` **dibaca sebelum** bring-up
+(urutan `B2LUsbRead` → `B2LUsbDevBringUp`), jadi `USB.pmu = 0` wajar — snapshot
+pra-bring-up. Bila perlu, pembacaan ulang PMU pasca-bring-up ditambahkan di M2.
+
+**Kesimpulan M1:** rantai `UsbfnPlatformPhyInit` (USBCON/PHY + PMU) →
+`Dwc3CoreInit` (core DWC3) **berhasil** pada Exynos 9820, tanpa hang dan tanpa
+Data abort. Fondasi device-mode siap; enumerasi ke PC menunggu driver kelas
+(M2 = CDC-ACM), yang akan memanggil `ConfigureEnableEndpoints` untuk menyetel
+`RUN_STOP` dan mengaktifkan endpoint.
+
 #### Bundel flash (M1)
 
 `bash tools_flash_bundle.sh -d beyond0lte -o ~/Downloads`
