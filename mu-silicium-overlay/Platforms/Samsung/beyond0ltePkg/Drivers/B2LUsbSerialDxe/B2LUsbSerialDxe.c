@@ -26,8 +26,10 @@
       BIZE gelir.
 
   Bulk veri yolu: SET_CONFIGURATION sonrasi Bulk OUT'ta okuma kurulur; gelen
-  veri aynen Bulk IN'den geri yazilir (echo). Teshis ekraninda rx/tx/lc
-  sayaclari gorunur.
+  veri STI kuyruguna beslenir. Surucu KENDISI echo YAPMAZ: UEFI spec'e gore
+  konsol GIRDI cihazi yankilamaz, yankiyi okuyucu (UEFI Shell, edit vb.)
+  ConOut uzerinden yapar. Burada da yankilamak karakterleri ikiler. Teshis
+  ekraninda rx/tx/lc sayaclari gorunur.
 
   Olaylar bir zamanlayici ile pompa edilir (TPL_CALLBACK). Self-test ana
   dongusu her karede Raise/RestoreTPL yapip bekleyen notify'lari isledigi
@@ -1003,12 +1005,16 @@ B2LUsbHandleBulkOut (
 
   mDiagProtocol.Diag.RxBytes += (UINT32)Length;
 
+  //
+  // M3c: yalnizca konsola besle; echo YOK. Konsol okuyucusu (UEFI Shell) kendi
+  // yankisini ConOut uzerinden yapar. Burada da yankilamak, PC terminalinde
+  // her karakteri ikiler (vveerr gibi). M2b'de echo teshis icin vardi; artik
+  // gercek bir konsol tuketicisi oldugu icin kaldirildi.
+  //
   Bytes = (UINT8 *)mBulkOutBuffer;
   for (Index = 0; Index < Length; Index++) {
     B2LConsoleFeedByte (Bytes[Index]);
   }
-
-  B2LUsbTxPush (Bytes, Length);
 
   if (mConfigured) {
     B2LUsbStartBulkRead ();

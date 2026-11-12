@@ -1336,6 +1336,130 @@ tambahkan user ke grup `uucp` (`sudo usermod -aG uucp $USER`, lalu login ulang).
 
 ---
 
+### 6.8 M3c: EFI Shell interaktif lewat konsol USB
+
+Setelah M3, `ConIn`/`ConOut` sudah memuat konsol USB serial, tetapi BDS tetap
+berakhir di self-test. Alasannya: `MsBootOptionsLib` yang dipakai platform ini
+(`SiliciumPkg`) hanya mendaftarkan opsi **"Internal Storage"** dan
+**"USB Storage"** (keduanya menunjuk `MsBootPolicy`). Di S10e belum ada
+partisi FAT/ESP, jadi kedua opsi itu gagal, lalu BDS memanggil
+`PlatformBootManagerUnableToBoot` → layar self-test.
+
+Padahal **EFI Shell sudah ada di FV** (`Shell.inf`, `FILE_GUID =
+7C04A583-9E3E-4F1C-AD65-E05268D0B4D1` = `PcdShellFile`), dan `BootManagerMenuApp`
++ `MsBootPolicy` juga ikut ter-build ke FV. Yang kurang hanya **entri boot**
+yang menunjuk Shell.
+
+M3c menambahkan entri itu.
+
+#### Yang ditambahkan
+
+- `Library/PlatformBootManagerLib/B2LPlatformBootManager.c`
+  - fungsi baru `B2LRegisterShellBootOption()`:
+    1. `LocateHandleBuffer(gEfiFirmwareVolume2ProtocolGuid)`;
+    2. untuk setiap FV, `ReadSection(PcdShellFile, EFI_SECTION_PE32)` untuk
+       memastikan Shell benar-benar ada di FV itu;
+    3. bangun device path `Fv()/FvFile(7C04A583-...)` (`EfiInitializeFwVolDevicepathNode`
+       + `AppendDevicePathNode`);
+    4. `EfiBootManagerInitializeLoadOption(..., LOAD_OPTION_ACTIVE |
+       LOAD_OPTION_CATEGORY_APP, L"UEFI Shell", ...)`;
+    5. idempoten: `EfiBootManagerFindLoadOption` mencegah duplikat antarboot;
+    6. `EfiBootManagerAddLoadOptionVariable(&opt, (UINTN)-1)` → ditambahkan di
+       **akhir** `BootOrder` (setelah SSD/USB).
+  - dipanggil dari `DeviceBootManagerBeforeConsole`, tepat setelah ketiga
+    `EfiBootManagerUpdateConsoleVariable(ConIn/ConOut/ErrOut, ...)`.
+    Titik ini dijalankan `PlatformBootManagerBeforeConsole` **setelah**
+    `MsBootOptionsLibRegisterDefaultBootOptions()`, jadi SSD/USB sudah
+    terdaftar dan Shell menyusul di belakangnya.
+- `Library/PlatformBootManagerLib/B2LPlatformBootManagerLib.inf`
+  - `[Packages]` + `PcBdsPkg/PcBdsPkg.dec`;
+  - `[LibraryClasses]` + `DevicePathLib`, `PcdLib`;
+  - `[Protocols]` + `gEfiFirmwareVolume2ProtocolGuid`;
+  - `[Pcd]` + `gPcBdsPkgTokenSpaceGuid.PcdShellFile` (GUID Shell dari DSC —
+    satu sumber kebenaran dengan `MsBootOptionsLib`).
+
+#### Alur boot sekarang
+
+```
+BDS -> "Internal Storage" (gagal: belum ada ESP)
+    -> "USB Storage"      (gagal)
+    -> "UEFI Shell"       (FV)  -> prompt Shell interaktif di konsol USB
+```
+
+Self-test tetap dipertahankan di `DeviceBootManagerUnableToBoot` sebagai
+**fallback** (hanya muncul bila Shell tidak ditemukan/gagal).
+
+#### Mode ConOut
+
+`ConSplitter` **tidak** meng-interseksi mode 0/1 (lihat komentar
+`ConSplitterGetIntersection`), jadi agregat `gST->ConOut` tetap sah di mode 0:
+output Shell tampil di layar (GraphicsConsole 80×25) **dan** dikirim ke
+CDC-ACM Bulk IN (200×60) sehingga terbaca di terminal PC.
+
+#### Uji
+
+1. Flash `~/Downloads/beyond0lte-flash.zip` (Odin `AP=uefi-boot.tar`,
+   Re-Partition **tidak** dicentang).
+2. Sambungkan kabel USB ke PC, pantau port serial:
+   ```
+   sudo python3 tools_serial_monitor.py /dev/ttyACM0 115200
+   ```
+   (atau `picocom /dev/ttyACM0 -b 115200`)
+3. Diharapkan muncul prompt `Shell>` di terminal PC, dan perintah berikut
+   bekerja: `ver`, `memmap`, `bcfg boot dump`, `ls -b`, `reset`, `exit`.
+
+#### Echo input: mengapa dimatikan di driver
+
+Verifikasi pertama M3c berhasil, tetapi setiap karakter yang diketik muncul
+**dobel** di terminal PC (`vveerr`, `bboooott`). Penyebabnya: driver M2b
+menulis ulang setiap byte yang diterima ke Bulk IN (echo), sementara UEFI
+Shell **juga** meng-echo lewat `ConOut` (yang memuat USB STO). Menurut spec
+UEFI, cihaz `Simple Text Input` **tidak** boleh meng-echo — pemanggil (Shell,
+editor) yang melakukannya. Karena itu echo di driver dihapus
+(`B2LUsbRxDone` tidak lagi memanggil `B2LUsbTxPush`). Setelah ini karakter
+tampil sekali. (Jalur RX sendiri tidak berubah; `rx`/`kr` tetap naik.)
+
+#### Uji
+
+1. Flash `~/Downloads/beyond0lte-flash.zip` (Odin `AP=uefi-boot.tar`,
+   Re-Partition **tidak** dicentang).
+2. Sambungkan kabel USB ke PC, pantau port serial:
+   ```
+   sudo python3 tools_serial_monitor.py /dev/ttyACM0 115200
+   ```
+   (atau `picocom /dev/ttyACM0 -b 115200`)
+3. Diharapkan muncul prompt `Shell>`, dan perintah berikut bekerja: `ver`,
+   `memmap`, `bcfg boot dump`, `ls -b`, `reset`, `exit`.
+
+`lsusb` = `04e8:2143` (sama seperti M2b/M3).
+
+#### Bundel flash (M3c)
+
+```
+~/Downloads/beyond0lte-flash.zip
+  uefi-boot.tar        sha256 9600611073a29170f7cb2177bec544f96046a0e8587c4a8a0ed9d84b310a8649
+  Mu-beyond0lte.img    sha256 7143c2fce8934bc63ea281be47b145167c704db615be30f758de7961e58670a5
+```
+
+##### Verifikasi: SUKSES (M3c selesai)
+
+- **Prompt & perintah:** di terminal PC muncul `Shell>` (UEFI Interactive
+  Shell v2.2, `UEFI v2.70 (Project Silicium)`). `ver`, `memmap`, dan
+  `bcfg boot dump` dijalankan dan mengeluarkan hasil (`memmap` menunjukkan
+  total ≈ 6 GiB; `bcfg boot dump` mencacah `Boot0000..`).
+- **Dua arah:** output perintah tampil **di layar OLED** sekaligus **di
+  terminal PC** — membuktikan `gST->ConOut` agregat mengalirkan ke
+  GraphicsConsole dan ke CDC-ACM Bulk IN.
+- **Catatan:** echo ganda pada verifikasi pertama sudah diperbaiki (lihat
+  "Echo input" di atas); flash ulang dengan bundel di atas menghasilkan
+  karakter tunggal.
+
+Langkah berikutnya yang wajar: pakai Shell ini untuk menyiapkan ESP/boot
+option langsung dari perangkat (mis. `bcfg boot add`, atau tulis
+`\EFI\BOOT\BOOTAA64.EFI` ke partisi FAT) — pintu menuju boot OS seperti S10+.
+
+---
+
 ## 7. Rollback
 
 Sama seperti BUILD.md §8. UEFI ditulis ke partisi **BOOT**, bukan ke `sboot`,

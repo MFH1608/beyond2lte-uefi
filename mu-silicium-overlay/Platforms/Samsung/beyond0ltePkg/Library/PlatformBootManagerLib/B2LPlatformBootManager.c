@@ -26,6 +26,8 @@
 #include <Library/IoLib.h>
 #include <Library/MemoryAllocationHelperLib.h>
 #include <Library/UefiBootManagerLib.h>
+#include <Library/DevicePathLib.h>
+#include <Library/PcdLib.h>
 
 #include <Protocol/BlockIo.h>
 #include <Protocol/AbsolutePointer.h>
@@ -37,6 +39,7 @@
 #include <Protocol/SimpleTextOut.h>
 #include <Protocol/DevicePath.h>
 #include <Protocol/UsbFunctionIo.h>
+#include <Protocol/FirmwareVolume2.h>
 
 //
 // S10e'de son DRAM banki 0x980000000'da bitiyor (0x80000000..0x100000000 +
@@ -1111,6 +1114,148 @@ B2LSelfTest (
 }
 
 //
+// ====================== M3c: FV'den UEFI Shell boot option =================
+//
+// Shell derlemede FV'ye gomulu (Shell.inf, FILE_GUID = PcdShellFile). Ancak bu
+// platformda kullanilan MsBootOptionsLib (SiliciumPkg) yalnizca SSD/USB
+// politika seceneklerini kaydediyor; "Internal UEFI Shell" secenegini
+// olusturmuyor. Cihazda FAT/ESP bolumu olmadigindan SSD/USB secenekleri
+// basarisiz olur ve BDS UnableToBoot'a duser (self-test ekrani). Bu fonksiyon
+// FV'deki Shell'i isaret eden bir boot option ekler; konsol M3'te USB seri
+// hattina baglandigi icin dogrudan interaktif UEFI Shell acilir.
+//
+// MsBootOptionsLib.c'deki RegisterFvBootOption mantiginin dar bir kopyasi:
+// ayni (FilePath, Description, Attributes) zaten varsa tekrar eklenmez, yoksa
+// BootOrder'in SONUNA eklenir (SSD/USB'den sonra denenir).
+//
+STATIC
+EFI_STATUS
+B2LRegisterShellBootOption (
+  VOID
+  )
+{
+  EFI_STATUS                         Status;
+  EFI_HANDLE                         *FvHandles;
+  UINTN                              FvCount;
+  UINTN                              Index;
+  EFI_FIRMWARE_VOLUME2_PROTOCOL      *Fv;
+  UINT32                             AuthStatus;
+  VOID                               *Buffer;
+  UINTN                              Size;
+  EFI_DEVICE_PATH_PROTOCOL           *FvPath;
+  EFI_DEVICE_PATH_PROTOCOL           *ShellPath;
+  MEDIA_FW_VOL_FILEPATH_DEVICE_PATH  FileNode;
+  EFI_BOOT_MANAGER_LOAD_OPTION       Option;
+  EFI_BOOT_MANAGER_LOAD_OPTION       *Existing;
+  UINTN                              ExistingCount;
+
+  FvHandles = NULL;
+  FvCount   = 0;
+  FvPath    = NULL;
+
+  //
+  // PcdShellFile GUID'ini tasiyan FV'yi bul. ReadSection ile dosyanin
+  // gercekten var oldugunu dogrulariz; yoksa bu FV atlanir.
+  //
+  Status = gBS->LocateHandleBuffer (
+                  ByProtocol,
+                  &gEfiFirmwareVolume2ProtocolGuid,
+                  NULL,
+                  &FvCount,
+                  &FvHandles
+                  );
+  if (EFI_ERROR (Status)) {
+    return Status;
+  }
+
+  for (Index = 0; Index < FvCount; Index++) {
+    Status = gBS->HandleProtocol (
+                    FvHandles[Index],
+                    &gEfiFirmwareVolume2ProtocolGuid,
+                    (VOID **)&Fv
+                    );
+    if (EFI_ERROR (Status)) {
+      continue;
+    }
+
+    Buffer = NULL;
+    Size   = 0;
+    Status = Fv->ReadSection (
+                  Fv,
+                  PcdGetPtr (PcdShellFile),
+                  EFI_SECTION_PE32,
+                  0,
+                  &Buffer,
+                  &Size,
+                  &AuthStatus
+                  );
+    if (Buffer != NULL) {
+      FreePool (Buffer);
+    }
+
+    if (!EFI_ERROR (Status)) {
+      FvPath = DevicePathFromHandle (FvHandles[Index]);
+      break;
+    }
+  }
+
+  FreePool (FvHandles);
+
+  if (FvPath == NULL) {
+    return EFI_NOT_FOUND;
+  }
+
+  //
+  // Fv()/FvFile(shell) cihaz yolunu kur.
+  //
+  EfiInitializeFwVolDevicepathNode (&FileNode, PcdGetPtr (PcdShellFile));
+  ShellPath = AppendDevicePathNode (FvPath, (EFI_DEVICE_PATH_PROTOCOL *)&FileNode);
+  if (ShellPath == NULL) {
+    return EFI_OUT_OF_RESOURCES;
+  }
+
+  //
+  // InitializeLoadOption FilePath'i KOPYALAR; ShellPath bu yuzden serbest
+  // birakilabilir.
+  //
+  Status = EfiBootManagerInitializeLoadOption (
+             &Option,
+             LoadOptionNumberUnassigned,
+             LoadOptionTypeBoot,
+             LOAD_OPTION_ACTIVE | LOAD_OPTION_CATEGORY_APP,
+             L"UEFI Shell",
+             ShellPath,
+             NULL,
+             0
+             );
+  FreePool (ShellPath);
+
+  if (EFI_ERROR (Status)) {
+    return Status;
+  }
+
+  //
+  // Idempotent: ayni secenek zaten varsa ekleme (aksi halde her acilista
+  // BootOrder'a yeni bir kopya duserdi).
+  //
+  Existing = EfiBootManagerGetLoadOptions (&ExistingCount, LoadOptionTypeBoot);
+  if ((Existing != NULL) && (EfiBootManagerFindLoadOption (&Option, Existing, ExistingCount) != -1)) {
+    EfiBootManagerFreeLoadOptions (Existing, ExistingCount);
+    EfiBootManagerFreeLoadOption (&Option);
+    return EFI_SUCCESS;
+  }
+
+  if (Existing != NULL) {
+    EfiBootManagerFreeLoadOptions (Existing, ExistingCount);
+  }
+
+  Status = EfiBootManagerAddLoadOptionVariable (&Option, (UINTN)-1);
+  EfiBootManagerFreeLoadOption (&Option);
+
+  return Status;
+}
+
+//
 // DeviceBootManagerLib implements. The rest is the same as the Silicon Null
 // implementation; only UnableToBoot does real work on this device.
 //
@@ -1132,6 +1277,15 @@ DeviceBootManagerBeforeConsole (
   EfiBootManagerUpdateConsoleVariable (ConIn,  (EFI_DEVICE_PATH_PROTOCOL *)(VOID *)&mB2LUsbConsolePath, NULL);
   EfiBootManagerUpdateConsoleVariable (ConOut, (EFI_DEVICE_PATH_PROTOCOL *)(VOID *)&mB2LUsbConsolePath, NULL);
   EfiBootManagerUpdateConsoleVariable (ErrOut, (EFI_DEVICE_PATH_PROTOCOL *)(VOID *)&mB2LUsbConsolePath, NULL);
+
+  //
+  // M3c: FV'deki UEFI Shell'i boot option olarak kaydet. Bu fonksiyon
+  // PlatformBootManagerBeforeConsole icinde MsBootOptionsLib'in varsayilan
+  // secenekleri (SSD/USB) kaydettigi noktadan SONRA calisir; Shell onlarin
+  // ardina eklenir. Konsol zaten USB seri hattina bagli oldugu icin Shell
+  // dogrudan interaktif olur.
+  //
+  B2LRegisterShellBootOption ();
 
   return NULL;
 }

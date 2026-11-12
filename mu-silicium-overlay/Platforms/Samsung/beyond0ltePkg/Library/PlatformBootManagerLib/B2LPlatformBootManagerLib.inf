@@ -19,13 +19,16 @@
   MdeModulePkg/MdeModulePkg.dec
   MsCorePkg/MsCorePkg.dec
   SiliciumPkg/SiliciumPkg.dec
+  PcBdsPkg/PcBdsPkg.dec
 
 [LibraryClasses]
   BaseLib
   BaseMemoryLib
+  DevicePathLib
   DxeServicesTableLib
   IoLib
   MemoryAllocationHelperLib
+  PcdLib
   UefiLib
   UefiBootManagerLib
   UefiBootServicesTableLib
@@ -36,5 +39,13 @@
   gEfiBlockIoProtocolGuid
   gEfiAbsolutePointerProtocolGuid
   gEfiGraphicsOutputProtocolGuid
+  gEfiFirmwareVolume2ProtocolGuid
   gEfiSimpleFileSystemProtocolGuid
   gEfiUsbFunctionIoProtocolGuid
+
+#
+# M3c: FV'deki UEFI Shell'i isaret eden boot option, MsBootOptionsLib'in
+# kullandigi PCD ile AYNI GUID'den turetilir (tek kaynak: DSC).
+#
+[Pcd]
+  gPcBdsPkgTokenSpaceGuid.PcdShellFile
