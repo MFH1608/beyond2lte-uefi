@@ -733,7 +733,42 @@ Bundle probe (build v2):
 
 #### Hasil di perangkat
 
-_(belum diisi — menunggu satu flash di S10e; foto baris `USB.*`)_
+Flash v2 di S10e: **tidak hang lagi**, layar self-test tampil penuh, dan
+kedua region USB berhasil dipetakan — **tidak ada** baris merah `USB.map`.
+
+```
+USB.pmu : 00000000 00000000
+USB.con : 00030000 00000000
+USB.dw3 : 33313130 30C12004
+USB.xhc : 01100020 02000240
+```
+
+Decode:
+
+- `USB.dw3` `GSNPSID` = `0x33313130`. 16 bit atas = `0x3331`, **persis**
+  `DWC3_GSNPSID_USB31` (`Dwc3.h`); `Dwc3CoreInit()` juga menerima nilai ini
+  (bukan hanya `0x5533`). Jadi kontrolernya bukan DWC3 USB3 biasa, melainkan
+  **DWC3 USB 3.1**. Blok register DWC3 hidup dan terjangkau.
+- `USB.dw3` `GCTL` = `0x30C12004` → `PRTCAPDIR` (bit 12..13) = `0b10` = **2 =
+  DEVICE**. S-Boot meninggalkan core dalam **mode device** (konsisten dengan
+  Download Mode).
+- `USB.xhc` = `0x01100020`, `0x02000240`:
+  - `CAPLENGTH` = `0x20` (32 byte), `HCIVERSION` = `0x0110` → **xHCI 1.1**.
+  - `HCSPARAMS1`: `MaxSlots` = 64, `MaxIntrs` = 2, `NumPorts` = **2** (satu
+    USB2 + satu USB3) — konsisten dengan satu port USB-C S10e.
+- `USB.con` `CTRL_VER` = `0x00030000` (blok PHY `0x10B00000` terjangkau, bukan
+  `0`/`0xffffffff`); `CLKRST` = `0`.
+- `USB.pmu` = `0`/`0` → bit enable PHY (`0x15860000+0x72C`) **belum aktif**;
+  PHY belum dinyalakan (probe memang tidak menulis apa pun).
+
+Kesimpulan: masalahnya **bukan lagi mapping**. Blok DWC3 + xHCI + register PHY
+sudah hidup dan dapat diakses setelah S-Boot menyerahkan kendali. Yang belum
+ada hanyalah bring-up PHY/clock eksplisit dan pemilihan mode. `PRTCAPDIR=DEVICE`
+menunjukkan jalur **device** paling sedikit hambatannya.
+
+Catatan kosmetik: cek "hijau" di `USB.dw3` v2 hanya menguji `0x5533`, sehingga
+`0x3331` tampil abu. Akan diperlonggar pada build berikutnya (perilaku driver
+tidak berubah; `Dwc3CoreInit()` sudah menerima keduanya).
 
 ---
 
