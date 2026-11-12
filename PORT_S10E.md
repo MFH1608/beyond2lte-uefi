@@ -1047,6 +1047,27 @@ Tafsir:
      host **ada** dan sudah menyentuh kita, walau `su=0`.
    Jadi bacaan yang diinginkan: `pm` besar, dan bila PC tersambung `ev≥1`.
 
+##### Verifikasi: SUKSES (M2a selesai)
+
+Setelah perbaikan, dengan kabel tersambung ke PC:
+
+```
+USB.map : (satir hilang - kedua region terpetakan)
+USB.con : 00030000 00001004 > abu
+USB.dw3 : 33313130 30C12004 > hijau
+USB.xhc : 01100020 02000240 > hijau
+USB.ctl : 30C12004 80F00000 008E0001
+USB.ser: su=18 cf=1 ad=40 pm=7770 ev=12 > hijau
+```
+
+- **`su=18`** → 18 SETUP diterima; **`cf=1`** → `SET_CONFIGURATION` diterima
+  (host mengonfigurasi perangkat). **`ad=40`** → alamat USB `0x28` (`DCFG`).
+- **`pm=7770`** → pompa olah-event hidup normal; **`ev=12`** → 12 bus event.
+- **Kesimpulan M2a:** pengendali DWC3 device-mode pada Exynos 9820
+  **berhasil dienumerasi oleh PC**. Rantai `StartController` →
+  `ConfigureEnableEndpoints` → mesin Standart-Request milik driver kelas
+  berjalan. Ini fondasi yang diperlukan M2b (CDC-ACM).
+
 ---
 
 ## 7. Rollback
